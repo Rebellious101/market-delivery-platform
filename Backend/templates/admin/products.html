@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ürün Yönetimi | Market Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<header class="topbar">
+    <div>
+        <p class="eyebrow">MARKET ADMIN</p>
+        <h1>Ürün Yönetimi</h1>
+    </div>
+    <nav class="nav-links">
+        <a href="{{ url_for('admin_dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
+        <a href="{{ url_for('admin_orders') }}">Siparişler</a>
+        <a href="/">Mağazayı Gör</a>
+        <a href="{{ url_for('admin_logout') }}">Çıkış</a>
+    </nav>
+</header>
+
+<main class="admin-shell">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+
+    <section class="page-intro">
+        <div>
+            <p class="eyebrow">KATALOG</p>
+            <h2>Ürünlerini yayına al</h2>
+            <p class="muted">Buradan eklenen ürünler MySQL'e kaydedilir ve mobil uygulamanın ürün API'sinde görünür.</p>
+        </div>
+        <div class="stat-pill">{{ products|length }} ürün</div>
+    </section>
+
+    <section class="panel add-product-panel">
+        <div class="panel-heading">
+            <div>
+                <p class="eyebrow">YENİ KAYIT</p>
+                <h2>Ürün ekle</h2>
+            </div>
+            <span class="status-dot">API'ye hazır</span>
+        </div>
+        <form method="POST" enctype="multipart/form-data" class="product-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label>
+                Ürün adı
+                <input type="text" name="name" placeholder="Örn. Organik süt" required>
+            </label>
+            <label>
+                Kategori
+                <select name="category_id" required>
+                    <option value="">Kategori seçin</option>
+                    {% for category in categories %}
+                        <option value="{{ category.id }}">{{ category.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                Fiyat (TL)
+                <input type="number" name="price" min="0" step="0.01" placeholder="0.00" required>
+            </label>
+            <label>
+                Stok adedi
+                <input type="number" name="stock" min="0" step="1" placeholder="0" required>
+            </label>
+            <label class="full-width">
+                Açıklama
+                <textarea name="description" rows="3" placeholder="Ürün açıklaması"></textarea>
+            </label>
+            <label class="upload-field full-width">
+                Ürün görseli
+                <input type="file" name="image" accept="image/jpeg,image/png,image/webp,image/gif" required>
+                <small>JPG, PNG, WEBP veya GIF. Görsel mobil uygulamada da kullanılacak.</small>
+            </label>
+            <div class="form-actions full-width">
+                <button class="button button-primary" type="submit">Ürünü kaydet</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="panel">
+        <div class="panel-heading">
+            <div>
+                <p class="eyebrow">AKTİF KATALOG</p>
+                <h2>Mevcut ürünler</h2>
+            </div>
+        </div>
+        <div class="product-table-wrap">
+            <table class="product-table">
+                <thead>
+                    <tr>
+                        <th>Ürün</th>
+                        <th>Kategori</th>
+                        <th>Fiyat</th>
+                        <th>Stok</th>
+                        <th>Durum</th>
+                        <th>İşlem</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for product in products %}
+                    <tr>
+                        <td class="product-cell">
+                            {% if product.image %}
+                                <img src="{{ url_for('static', filename='uploads/' ~ product.image) }}" alt="{{ product.name }}">
+                            {% else %}
+                                <div class="image-placeholder">IMG</div>
+                            {% endif %}
+                            <div>
+                                <strong>{{ product.name }}</strong>
+                                <small>#{{ product.id }}</small>
+                            </div>
+                        </td>
+                        <td>{{ product.category or 'Kategorisiz' }}</td>
+                        <td>{{ '%.2f'|format(product.price) }} TL</td>
+                        <td>{{ product.stock }}</td>
+                        <td><span class="badge {% if product.active %}badge-success{% else %}badge-muted{% endif %}">{% if product.active %}Yayında{% else %}Pasif{% endif %}</span></td>
+                        <td class="actions-cell">
+                            <a class="table-action" href="{{ url_for('admin_edit_product', product_id=product.id) }}">Düzenle</a>
+                            <form method="POST" action="{{ url_for('admin_toggle_product', product_id=product.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button class="table-action table-action-muted" type="submit">{% if product.active %}Pasifleştir{% else %}Yayınla{% endif %}</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="empty-cell">Henüz ürün eklenmemiş.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</body>
+</html>

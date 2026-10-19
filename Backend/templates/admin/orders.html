@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Siparişler | Market Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<header class="topbar">
+    <div>
+        <p class="eyebrow">MARKET ADMIN</p>
+        <h1>Sipariş Takibi</h1>
+    </div>
+    <nav class="nav-links">
+        <a href="{{ url_for('admin_dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('admin_products') }}">Ürünler</a>
+        <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
+        <a href="{{ url_for('admin_logout') }}">Çıkış</a>
+    </nav>
+</header>
+<main class="admin-shell">
+    <section class="page-intro">
+        <div>
+            <p class="eyebrow">OPERASYON</p>
+            <h2>Gelen siparişler</h2>
+            <p class="muted">Mobil uygulamadan gelen siparişleri ve ürün kalemlerini incele.</p>
+        </div>
+        <div class="stat-pill">{{ orders|length }} sipariş</div>
+    </section>
+   
+   <!-- orders.html - Güncellenmiş Sipariş Kartı Bölümü -->
+<section class="orders-grid">
+    {% for order in orders.values() %}
+        <article class="order-card">
+            
+            <!-- 1. KART BAŞLIĞI VE DURUM SEÇİMİ -->
+            <div class="order-card-header">
+                <div>
+                    <p class="eyebrow">SİPARİŞ #{{ order.order_id }}</p>
+                    <h2>{{ order.created_at.strftime('%d.%m.%Y %H:%M') if order.created_at else 'Tarih yok' }}</h2>
+                </div>
+                
+                <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 6px;">
+                    <strong>{{ '%.2f'|format(order.total_price) }} TL</strong>
+                    
+                    <!-- SİPARİŞ DURUMUNU GÜNCELLEME FORMU -->
+                    <form method="POST" action="{{ url_for('admin_update_order_status', order_id=order.order_id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <select name="status" onchange="this.form.submit()" style="padding: 4px 8px; border-radius: 6px; border: 1px solid #cddbd2; font-size: 12px; font-weight: bold; background: #fff; cursor: pointer;">
+                            <option value="Hazırlanıyor" {% if order.status == 'Hazırlanıyor' %}selected{% endif %}>Hazırlanıyor</option>
+                            <option value="Yolda" {% if order.status == 'Yolda' %}selected{% endif %}>Yolda</option>
+                            <option value="Teslim Edildi" {% if order.status == 'Teslim Edildi' %}selected{% endif %}>Teslim Edildi</option>
+                            <option value="İptal Edildi" {% if order.status == 'İptal Edildi' %}selected{% endif %}>İptal Edildi</option>
+                        </select>
+                    </form>
+                </div>
+            </div>
+
+            <!-- 2. MÜŞTERİ VE ADRES BİLGİSİ -->
+            <div class="order-customer-info">
+                <p><strong>Müşteri:</strong> {{ order.user_name or 'Belirtilmedi' }} ({{ order.user_email or 'E-posta yok' }})</p>
+                <p><strong>Adres:</strong> {{ order.shipping_address or 'Adres girilmedi' }}</p>
+            </div>
+
+            <!-- 3. SİPARİŞ EDİLEN ÜRÜNLER -->
+            <div class="order-items">
+                {% for item in order['items'] %}
+                    <div class="order-item">
+                        <span>{{ item.name }} <small>x{{ item.quantity }}</small></span>
+                        <strong>{{ '%.2f'|format(item.price) }} TL</strong>
+                    </div>
+                {% endfor %}
+            </div>
+
+        </article>
+    {% else %}
+        <div class="panel empty-state">
+            <span class="empty-icon">∅</span>
+            <h2>Henüz sipariş yok</h2>
+            <p class="muted">Mobil uygulamadan verilen siparişler burada görünecek.</p>
+        </div>
+    {% endfor %}
+</section>
+</main>
+</body>
+</html>

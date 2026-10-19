@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sepetim - Market Uygulaması</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<header>
+    <h1>Alışveriş Sepetim</h1>
+    <nav>
+        <a href="/">Ana Sayfa</a>
+        <a href="/siparislerim">📦 Siparişlerim</a>
+    </nav>
+</header>
+
+<main>
+    <section>
+        {% if sepet_urunleri %}
+            <table class="sepet-tablo" style="width:100%; border-collapse: collapse; margin-bottom: 20px;">
+                <thead>
+                    <tr style="background-color: #f2f2f2; text-align: left;">
+                        <th style="padding: 10px; border: 1px solid #ddd;">Ürün Adı</th>
+                        <th style="padding: 10px; border: 1px solid #ddd;">Birim Fiyat</th>
+                        <th style="padding: 10px; border: 1px solid #ddd;">Adet</th>
+                        <th style="padding: 10px; border: 1px solid #ddd;">Toplam Fiyat</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in sepet_urunleri %}
+                    <tr>
+                        <td style="padding: 10px; border: 1px solid #ddd;">{{ item.name }}</td>
+                        <td style="padding: 10px; border: 1px solid #ddd;">{{ item.price }} TL</td>
+                        <td style="padding: 10px; border: 1px solid #ddd;">{{ item.adet }}</td>
+                        <td style="padding: 10px; border: 1px solid #ddd;">{{ item.toplam_fiyat }} TL</td>
+                        <td style="padding: 10px; border: 1px solid #ddd;">
+                            <!-- Sepetten Çıkarma Formu -->
+                            <form action="{{ url_for('sepetten_cikar', product_id=item.id) }}" method="POST" style="margin: 0;">
+                                <button type="submit" style="background-color: #e74c3c; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer;">
+                                    Azalt / Sil
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <h3>Genel Toplam: <span style="color: #27ae60;">{{ toplam_tutar }} TL</span></h3>
+
+            <form action="{{ url_for('siparis_tamamla') }}" method="POST" style="margin-top: 20px;">
+                <button type="submit" style="background-color: #27ae60; color: white; border: none; padding: 12px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; font-weight: bold;">
+                    Siparişi Tamamla
+                </button>
+            </form>
+        {% else %}
+            <p>Sepetinizde henüz ürün bulunmuyor.</p>
+            <a href="/" style="display: inline-block; margin-top: 10px; padding: 10px 15px; background: #3498db; color: white; text-decoration: none; border-radius: 5px;">Alışverişe Başla</a>
+        {% endif %}
+    </section>
+</main>
+
+<footer>
+    <p>© 2026 Market Uygulaması</p>
+</footer>
+
+</body>
+</html>

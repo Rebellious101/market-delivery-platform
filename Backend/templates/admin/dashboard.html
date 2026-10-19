@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard | Market Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<header class="topbar">
+    <div>
+        <p class="eyebrow">MARKET ADMIN</p>
+        <h1>Kontrol Merkezi</h1>
+    </div>
+    <nav class="nav-links">
+        <a href="{{ url_for('admin_products') }}">Ürünler</a>
+        <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
+        <a href="{{ url_for('admin_orders') }}">Siparişler</a>
+        <a href="/">Mağazayı Gör</a>
+        <a href="{{ url_for('admin_logout') }}">Çıkış</a>
+    </nav>
+</header>
+
+<main class="admin-shell">
+    <section class="page-intro">
+        <div>
+            <p class="eyebrow">GENEL BAKIŞ</p>
+            <h2>Bugünün operasyon özeti</h2>
+            <p class="muted">Katalog, stok ve sipariş durumunu tek ekrandan takip et.</p>
+        </div>
+        <a class="button button-primary" href="{{ url_for('admin_products') }}">+ Ürün ekle</a>
+    </section>
+    <section class="metrics-grid">
+        <div class="metric-card"><span>Aktif ürün</span><strong>{{ active_product_count }}</strong><small>{{ product_count }} toplam kayıt</small></div>
+        <div class="metric-card"><span>Kategoriler</span><strong>{{ category_count }}</strong><small>Katalog grubu</small></div>
+        <div class="metric-card"><span>Siparişler</span><strong>{{ order_count }}</strong><small>Toplam sipariş</small></div>
+        <div class="metric-card"><span>Ciro</span><strong>{{ '%.2f'|format(revenue) }} TL</strong><small>Toplam sipariş tutarı</small></div>
+    </section>
+    <section class="dashboard-grid">
+        <div class="panel quick-panel">
+            <div class="panel-heading"><div><p class="eyebrow">HIZLI ERİŞİM</p><h2>Yönetim</h2></div></div>
+            <a class="quick-link" href="{{ url_for('admin_products') }}"><span>Ürün kataloğu</span><b>→</b></a>
+            <a class="quick-link" href="{{ url_for('admin_categories') }}"><span>Kategori düzeni</span><b>→</b></a>
+            <a class="quick-link" href="{{ url_for('admin_orders') }}"><span>Sipariş takibi</span><b>→</b></a>
+        </div>
+        <div class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">STOK UYARISI</p><h2>Düşük stok</h2></div></div>
+            {% for product in low_stock_products %}
+                <div class="stock-row"><span>{{ product.name }}</span><strong class="{% if product.stock == 0 %}stock-zero{% endif %}">{{ product.stock }} adet</strong></div>
+            {% else %}
+                <p class="muted">Kritik seviyede ürün yok.</p>
+            {% endfor %}
+        </div>
+    </section>
+</main>
+
+</body>
+</html>

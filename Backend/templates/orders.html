@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>Sipariş Geçmişi</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<header>
+    <h1>Geçmiş Siparişlerim</h1>
+    <nav>
+        <a href="/">Ana Sayfa</a>
+        <a href="/sepet">🛒 Sepetim</a>
+    </nav>
+</header>
+
+<main>
+    <section>
+        {% if orders %}
+            {% for order_id, order in orders.items() %}
+                <div style="border: 1px solid #ddd; padding: 15px; margin-bottom: 20px; border-radius: 5px; background: #f9f9f9;">
+                    <h3>Sipariş ID: #{{ order_id }}</h3>
+                    <p><strong>Tarih:</strong> {{ order.created_at }}</p>
+                    <p><strong>Genel Toplam:</strong> {{ order.total_price }} TL</p>
+                    
+                    <h4>Ürünler:</h4>
+                    <ul>
+                        {% for item in order.items %}
+                            <li>{{ item.name }} - {{ item.quantity }} Adet x {{ item.price }} TL</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p>Henüz verilmiş bir siparişiniz bulunmuyor.</p>
+        {% endif %}
+    </section>
+</main>
+
+</body>
+</html>

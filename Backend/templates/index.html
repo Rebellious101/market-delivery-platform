@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Market Uygulaması</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+</head>
+
+<body>
+
+```
+<header>
+    <h1>Market Uygulaması</h1>
+
+    <nav>
+        <a href="/">Ana Sayfa</a>
+    <a href="/sepet">🛒 Sepetim</a>
+    </nav>
+</header>
+
+
+<main>
+
+    <!-- Kategoriler -->
+    <section>
+        <h2>Kategoriler</h2>
+
+        <a href="/">Tüm Ürünler</a>
+
+        {% for category in categories %}
+
+            <a href="/category/{{ category.id }}">
+                 {{ category.name }}
+            </a>
+
+        {% endfor %}
+    </section>
+
+
+    <hr>
+
+
+    <!-- Ürünler -->
+    <section>
+
+       <h2>Ürünler</h2>
+
+<div class="products">
+
+    {% for product in products %}
+
+        <div class="product-card">
+
+            <h3>{{ product.name }}</h3>
+
+            <p>{{ product.description }}</p>
+
+            <p class="price">
+                {{ product.price }} TL
+            </p>
+
+            <p>
+                Stok: {{ product.stock }}
+            </p>
+
+            <form action="{{ url_for('sepete_ekle', product_id=product.id) }}" method="POST">
+                <button type="submit" class="add-cart">
+                    Sepete Ekle
+                </button>
+            </form>
+
+        </div>
+
+    {% endfor %}
+
+</div>
+    </section>
+
+</main>
+
+
+<footer>
+    <p>© 2026 Market Uygulaması</p>
+</footer>
+```
+
+</body>
+</html>
