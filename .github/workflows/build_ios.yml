@@ -1,0 +1,43 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build iOS IPA on macOS
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        run: |
+          cd market_app
+          flutter pub get
+
+      - name: Build iOS App (No Codesign)
+        run: |
+          cd market_app
+          flutter build ios --release --no-codesign
+
+      - name: Package IPA
+        run: |
+          cd market_app/build/ios/iphoneos
+          mkdir Payload
+          cp -r Runner.app Payload/
+          zip -r PrestijMarket.ipa Payload
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrestijMarket-iOS
+          path: market_app/build/ios/iphoneos/PrestijMarket.ipa
+          retention-days: 7
