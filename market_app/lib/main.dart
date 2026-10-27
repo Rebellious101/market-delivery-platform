@@ -104,7 +104,6 @@ class _MarketHomePageState extends State<MarketHomePage> {
   late Future<List<Product>> _productsFuture;
   Future<List<Category>> _categoriesFuture = Future.value(const []);
   late Future<List<Campaign>> _campaignsFuture;
-  bool _hasLoadedCategories = false;
   int? _selectedCategoryId;
   int _selectedTab = 0;
   String _searchQuery = '';
@@ -381,8 +380,10 @@ class _MarketHomePageState extends State<MarketHomePage> {
           }
           setState(() {
             _selectedTab = index;
-            if (index == 1 && !_hasLoadedCategories) {
-              _hasLoadedCategories = true;
+            if (index == 0) {
+              _productsFuture = _fetchProducts(categoryId: _selectedCategoryId);
+              _campaignsFuture = _fetchCampaigns();
+            } else if (index == 1) {
               _categoriesFuture = _fetchCategories();
             } else if (index == 3) {
               _campaignsFuture = _fetchCampaigns();
@@ -518,100 +519,116 @@ class _MarketHomePageState extends State<MarketHomePage> {
                 Expanded(child: Center(child: Text(strings.noSearchResults)))
               else
                 Expanded(
-                  child: GridView.builder(
-                    itemCount: filteredProducts.length,
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          crossAxisSpacing: 12,
-                          mainAxisSpacing: 12,
-                          childAspectRatio: 0.75,
-                        ),
-                    itemBuilder: (context, index) {
-                      final product = filteredProducts[index];
-                      final quantity = CartManager().quantityFor(product.id);
-                      return Card(
-                        elevation: 2,
-                        clipBehavior: Clip.antiAlias,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(
-                            AppConstants.defaultRadius,
+                  child: RefreshIndicator(
+                    onRefresh: () async {
+                      final future = _fetchProducts(
+                        categoryId: _selectedCategoryId,
+                      );
+                      final campFuture = _fetchCampaigns();
+                      setState(() {
+                        _productsFuture = future;
+                        _campaignsFuture = campFuture;
+                      });
+                      await future;
+                    },
+                    child: GridView.builder(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      itemCount: filteredProducts.length,
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 2,
+                            crossAxisSpacing: 12,
+                            mainAxisSpacing: 12,
+                            childAspectRatio: 0.75,
                           ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: InkWell(
-                                onTap: () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) =>
-                                        ProductDetailScreen(product: product),
-                                  ),
-                                ).then((_) => setState(() {})),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Expanded(
-                                      child: Image.network(
-                                        product.imageUrl,
-                                        width: double.infinity,
-                                        fit: BoxFit.cover,
-                                        errorBuilder:
-                                            (context, error, stackTrace) =>
-                                                const Center(
-                                                  child: Icon(
-                                                    Icons.image_not_supported,
+                      itemBuilder: (context, index) {
+                        final product = filteredProducts[index];
+                        final quantity = CartManager().quantityFor(product.id);
+                        return Card(
+                          elevation: 2,
+                          clipBehavior: Clip.antiAlias,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(
+                              AppConstants.defaultRadius,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: InkWell(
+                                  onTap: () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) =>
+                                          ProductDetailScreen(product: product),
+                                    ),
+                                  ).then((_) => setState(() {})),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Expanded(
+                                        child: Image.network(
+                                          product.imageUrl,
+                                          width: double.infinity,
+                                          fit: BoxFit.cover,
+                                          errorBuilder:
+                                              (context, error, stackTrace) =>
+                                                  const Center(
+                                                    child: Icon(
+                                                      Icons.image_not_supported,
+                                                    ),
                                                   ),
-                                                ),
+                                        ),
                                       ),
-                                    ),
-                                    Padding(
-                                      padding: const EdgeInsets.fromLTRB(
-                                        8,
-                                        8,
-                                        8,
-                                        4,
-                                      ),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            product.title,
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 14,
+                                      Padding(
+                                        padding: const EdgeInsets.fromLTRB(
+                                          8,
+                                          8,
+                                          8,
+                                          4,
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              product.title,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 14,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
                                             ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            '${product.price.toStringAsFixed(2)} TL',
-                                            style: const TextStyle(
-                                              color: AppConstants.primaryColor,
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 15,
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              '${product.price.toStringAsFixed(2)} TL',
+                                              style: const TextStyle(
+                                                color:
+                                                    AppConstants.primaryColor,
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 15,
+                                              ),
                                             ),
-                                          ),
-                                        ],
+                                          ],
+                                        ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ),
-                            _ProductQuantityControls(
-                              product: product,
-                              quantity: quantity,
-                              onChanged: () => setState(() {}),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
+                              _ProductQuantityControls(
+                                product: product,
+                                quantity: quantity,
+                                onChanged: () => setState(() {}),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
                   ),
                 ),
             ],
@@ -782,37 +799,47 @@ class _MarketHomePageState extends State<MarketHomePage> {
         }
 
         final categories = snapshot.data ?? <Category>[];
-        return ListView(
-          padding: const EdgeInsets.all(AppConstants.defaultPadding),
-          children: [
-            ListTile(
-              leading: const Icon(Icons.apps),
-              title: Text(strings.all),
-              selected: _selectedCategoryId == null,
-              selectedTileColor: AppConstants.primaryColor.withValues(
-                alpha: 0.12,
-              ),
-              onTap: () {
-                _selectCategory(null);
-                setState(() => _selectedTab = 0);
-              },
-            ),
-            const Divider(height: 20),
-            ...categories.map(
-              (category) => ListTile(
-                leading: const Icon(Icons.category_outlined),
-                title: Text(category.name),
-                selected: _selectedCategoryId == category.id,
+        return RefreshIndicator(
+          onRefresh: () async {
+            final future = _fetchCategories();
+            setState(() {
+              _categoriesFuture = future;
+            });
+            await future;
+          },
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.all(AppConstants.defaultPadding),
+            children: [
+              ListTile(
+                leading: const Icon(Icons.apps),
+                title: Text(strings.all),
+                selected: _selectedCategoryId == null,
                 selectedTileColor: AppConstants.primaryColor.withValues(
                   alpha: 0.12,
                 ),
                 onTap: () {
-                  _selectCategory(category.id);
+                  _selectCategory(null);
                   setState(() => _selectedTab = 0);
                 },
               ),
-            ),
-          ],
+              const Divider(height: 20),
+              ...categories.map(
+                (category) => ListTile(
+                  leading: const Icon(Icons.category_outlined),
+                  title: Text(category.name),
+                  selected: _selectedCategoryId == category.id,
+                  selectedTileColor: AppConstants.primaryColor.withValues(
+                    alpha: 0.12,
+                  ),
+                  onTap: () {
+                    _selectCategory(category.id);
+                    setState(() => _selectedTab = 0);
+                  },
+                ),
+              ),
+            ],
+          ),
         );
       },
     );

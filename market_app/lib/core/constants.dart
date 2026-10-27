@@ -24,7 +24,7 @@ class AppConstants {
   // Gerçek cihaz + LAN için: flutter run --dart-define=API_BASE_URL=http://192.168.1.50:5000
   static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:5000',
+    defaultValue: 'https://prestijmarket.duckdns.org',
   );
   static const int connectionTimeout =
       30000; // Milisaniye cinsinden (30 saniye)

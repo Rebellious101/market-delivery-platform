@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from decimal import Decimal
 from functools import wraps
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote_plus
 from uuid import uuid4
 
 import jwt
@@ -177,7 +178,7 @@ def init_database_schema() -> None:
                 total_price DECIMAL(10, 2) NOT NULL,
                 shipping_address TEXT NULL,
                 payment_method VARCHAR(50) NOT NULL DEFAULT 'Nakit',
-                status VARCHAR(50) NOT NULL DEFAULT 'Hazırlanıyor',
+                status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
             )
@@ -187,6 +188,30 @@ def init_database_schema() -> None:
         if not cursor.fetchone():
             cursor.execute(
                 "ALTER TABLE orders ADD COLUMN payment_method VARCHAR(50) NOT NULL DEFAULT 'Nakit' AFTER shipping_address"
+            )
+        cursor.execute("SHOW COLUMNS FROM orders LIKE 'latitude'")
+        if not cursor.fetchone():
+            cursor.execute(
+                "ALTER TABLE orders ADD COLUMN latitude DECIMAL(10, 8) NULL AFTER shipping_address"
+            )
+        cursor.execute("SHOW COLUMNS FROM orders LIKE 'longitude'")
+        if not cursor.fetchone():
+            cursor.execute(
+                "ALTER TABLE orders ADD COLUMN longitude DECIMAL(11, 8) NULL AFTER latitude"
+            )
+        # Mevcut Türkçe sipariş durumlarını standart durum kodlarına (PENDING, PREPARING, ON_THE_WAY, DELIVERED, CANCELLED) dönüştür
+        status_migrations = [
+            ("PENDING", ("Beklemede", "PENDING")),
+            ("PREPARING", ("Hazırlanıyor", "PREPARING")),
+            ("ON_THE_WAY", ("Yolda", "Kuryede", "ON_THE_WAY")),
+            ("DELIVERED", ("Teslim Edildi", "DELIVERED")),
+            ("CANCELLED", ("İptal Edildi", "CANCELLED")),
+        ]
+        for target_code, legacy_values in status_migrations:
+            placeholders = ", ".join(["%s"] * len(legacy_values))
+            cursor.execute(
+                f"UPDATE orders SET status = %s WHERE status IN ({placeholders})",
+                (target_code, *legacy_values),
             )
         cursor.execute(
             """
@@ -211,6 +236,16 @@ def init_database_schema() -> None:
                 image VARCHAR(255) NULL,
                 active BOOLEAN NOT NULL DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_login_attempts (
+                ip_address VARCHAR(64) PRIMARY KEY,
+                failed_count INT NOT NULL DEFAULT 0,
+                locked_until DATETIME NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
             """
         )
@@ -241,8 +276,11 @@ class OrderItemRequest(BaseModel):
 
 class CreateOrderRequest(BaseModel):
     items: List[OrderItemRequest] = Field(min_length=1, max_length=100)
+    address_id: Optional[int] = Field(default=None)
     shipping_address: Optional[str] = Field(default=None, max_length=500)
     full_address: Optional[str] = Field(default=None, max_length=500)
+    latitude: Optional[float] = Field(default=None)
+    longitude: Optional[float] = Field(default=None)
     payment_method: Optional[str] = Field(default="Nakit", max_length=50)
 
 
@@ -305,25 +343,88 @@ app.jinja_env.globals["csrf_token"] = get_csrf_token
 
 @app.before_request
 def verify_admin_csrf():
-    """Admin panelindeki tüm POST isteklerinde CSRF token doğrulaması yapar."""
-    if request.method == "POST" and request.path.startswith("/admin"):
-        token = request.form.get("csrf_token")
+    """Admin ve kurye panelindeki mutasyon isteklerinde CSRF token doğrulaması yapar."""
+    if request.method in ("POST", "PATCH", "PUT", "DELETE") and (
+        request.path.startswith("/admin")
+        or request.path.startswith("/api/admin")
+        or request.path.startswith("/api/courier")
+    ):
+        token = (
+            request.form.get("csrf_token")
+            or request.headers.get("X-CSRF-Token")
+            or (request.get_json(silent=True) or {}).get("csrf_token")
+        )
         session_token = session.get("_csrf_token")
-        if not token or not session_token or not secrets.compare_digest(token, session_token):
+        if not token or not session_token or not secrets.compare_digest(str(token), str(session_token)):
             logger.warning(f"CSRF doğrulama hatası tespit edildi: {request.path}")
+            if request.path.startswith("/api/"):
+                return jsonify({"success": False, "error": "Güvenlik oturumu doğrulanamadı (CSRF)."}), 403
             flash("Güvenlik oturumu doğrulanamadı (CSRF). Lütfen formu tekrar gönderin.", "error")
             return redirect(request.referrer or url_for("admin_dashboard"))
 
 
 def admin_required(view):
-    """Admin oturumu gerektiren görünümler için yetki kontrolü."""
+    """Admin oturumu gerektiren görünümler ve admin API'leri için yetki kontrolü."""
     @wraps(view)
     def wrapped_view(*args, **kwargs):
         if not session.get("admin_authenticated"):
+            if request.path.startswith("/api/admin"):
+                return jsonify({"success": False, "error": "Yetkisiz erişim. Lütfen giriş yapın."}), 401
             return redirect(url_for("admin_login", next=request.path))
         return view(*args, **kwargs)
 
     return wrapped_view
+
+
+# ---------------------------------------------------------------------------
+# 3.1 Sipariş Durumu Sabitleri ve Yardımcıları
+# ---------------------------------------------------------------------------
+ACTIVE_ORDER_STATUSES = ("PENDING", "PREPARING", "ON_THE_WAY")
+HISTORY_ORDER_STATUSES = ("DELIVERED", "CANCELLED")
+ALL_ORDER_STATUSES = ACTIVE_ORDER_STATUSES + HISTORY_ORDER_STATUSES
+
+ORDER_STATUS_LABELS: Dict[str, str] = {
+    "PENDING": "Beklemede",
+    "PREPARING": "Hazırlanıyor",
+    "ON_THE_WAY": "Kuryede",
+    "DELIVERED": "Teslim Edildi",
+    "CANCELLED": "İptal Edildi",
+}
+
+ORDER_STATUS_ALIASES: Dict[str, str] = {
+    "PENDING": "PENDING",
+    "BEKLEMEDE": "PENDING",
+    "Beklemede": "PENDING",
+    "PREPARING": "PREPARING",
+    "HAZIRLANIYOR": "PREPARING",
+    "Hazırlanıyor": "PREPARING",
+    "ON_THE_WAY": "ON_THE_WAY",
+    "YOLDA": "ON_THE_WAY",
+    "Yolda": "ON_THE_WAY",
+    "KURYEDE": "ON_THE_WAY",
+    "Kuryede": "ON_THE_WAY",
+    "DELIVERED": "DELIVERED",
+    "TESLIM EDILDI": "DELIVERED",
+    "TESLİM EDİLDİ": "DELIVERED",
+    "Teslim Edildi": "DELIVERED",
+    "CANCELLED": "CANCELLED",
+    "CANCELED": "CANCELLED",
+    "IPTAL EDILDI": "CANCELLED",
+    "İPTAL EDİLDİ": "CANCELLED",
+    "İptal Edildi": "CANCELLED",
+}
+
+
+def normalize_order_status(raw_status: Optional[str]) -> Optional[str]:
+    if not raw_status:
+        return None
+    cleaned = raw_status.strip()
+    return ORDER_STATUS_ALIASES.get(cleaned) or ORDER_STATUS_ALIASES.get(cleaned.upper())
+
+
+def order_status_label(status_code: Optional[str]) -> str:
+    normalized = normalize_order_status(status_code) or "PENDING"
+    return ORDER_STATUS_LABELS.get(normalized, "Beklemede")
 
 
 # ---------------------------------------------------------------------------
@@ -578,14 +679,35 @@ def api_create_order():
                         "error": f"Yetersiz stok! '{product['name']}' ürününden en fazla {product['stock']} adet alınabilir."
                     }), 400
 
-            # 3. Ana siparişi kullanıcı kimliği, adres ve ödeme yöntemiyle kaydet
+            # 3. Ana siparişi kullanıcı kimliği, adres, koordinat ve ödeme yöntemiyle kaydet
             payment_method = (req.payment_method or "Nakit").strip() or "Nakit"
+            order_lat = req.latitude
+            order_lng = req.longitude
+            if (order_lat is None or order_lng is None) and req.address_id:
+                cursor.execute(
+                    "SELECT latitude, longitude FROM user_addresses WHERE id = %s AND user_id = %s",
+                    (req.address_id, user_id),
+                )
+                addr_row = cursor.fetchone()
+                if addr_row:
+                    order_lat = float(addr_row["latitude"]) if addr_row.get("latitude") is not None else None
+                    order_lng = float(addr_row["longitude"]) if addr_row.get("longitude") is not None else None
+            elif order_lat is None or order_lng is None:
+                cursor.execute(
+                    "SELECT latitude, longitude FROM user_addresses WHERE user_id = %s AND full_address = %s ORDER BY id DESC LIMIT 1",
+                    (user_id, shipping_address),
+                )
+                addr_row = cursor.fetchone()
+                if addr_row:
+                    order_lat = float(addr_row["latitude"]) if addr_row.get("latitude") is not None else None
+                    order_lng = float(addr_row["longitude"]) if addr_row.get("longitude") is not None else None
+
             cursor.execute(
                 """
-                INSERT INTO orders (user_id, total_price, shipping_address, payment_method, status) 
-                VALUES (%s, %s, %s, %s, 'Hazırlanıyor')
+                INSERT INTO orders (user_id, total_price, shipping_address, latitude, longitude, payment_method, status) 
+                VALUES (%s, %s, %s, %s, %s, %s, 'PENDING')
                 """,
-                (user_id, total_price, shipping_address, payment_method),
+                (user_id, total_price, shipping_address, order_lat, order_lng, payment_method),
             )
             order_id = cursor.lastrowid
 
@@ -609,7 +731,8 @@ def api_create_order():
                 "order_id": order_id,
                 "total_price": float(total_price),
                 "payment_method": payment_method,
-                "status": "Hazırlanıyor",
+                "status": order_status_label("PENDING"),
+                "status_code": "PENDING",
             }), 201
 
         except Exception:
@@ -657,12 +780,14 @@ def api_get_orders():
             for row in rows:
                 oid = row["order_id"]
                 if oid not in orders:
+                    normalized_status = normalize_order_status(row["status"]) or "PENDING"
                     orders[oid] = {
                         "order_id": oid,
                         "total_price": float(row["total_price"]),
                         "shipping_address": row["shipping_address"] or "",
                         "payment_method": row["payment_method"] or "Nakit",
-                        "status": row["status"] or "Hazırlanıyor",
+                        "status": order_status_label(normalized_status),
+                        "status_code": normalized_status,
                         "created_at": row["created_at"].strftime("%Y-%m-%d %H:%M:%S") if row["created_at"] else None,
                         "items": [],
                     }
@@ -757,23 +882,105 @@ def delete_user_address(address_id: int):
 # ---------------------------------------------------------------------------
 # 5. Web Yönetim Paneli (Admin)
 # ---------------------------------------------------------------------------
+ADMIN_MAX_FAILED_ATTEMPTS = 5
+ADMIN_LOCKOUT_MINUTES = 15
+
+
+def _get_client_ip() -> str:
+    remote = request.remote_addr or "unknown"
+    # Nginx (aynı sunucudaki reverse proxy) üzerinden gelen isteklerde gerçek istemci IP'si
+    # X-Real-IP başlığındadır. Sadece localhost'tan gelen başlığa güvenilir; böylece
+    # 5000 portuna doğrudan bağlanan biri sahte başlıkla kilidi atlatamaz.
+    if remote in ("127.0.0.1", "::1"):
+        real_ip = (request.headers.get("X-Real-IP") or "").strip()
+        if real_ip:
+            return real_ip[:64]
+    return remote[:64]
+
 
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
     if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
-        if secrets.compare_digest(username, ADMIN_USERNAME) and secrets.compare_digest(
-            password, ADMIN_PASSWORD
-        ):
-            session.clear()
-            session["admin_authenticated"] = True
-            session["admin_username"] = username
-            next_url = request.args.get("next") or request.form.get("next")
-            if not next_url or not next_url.startswith("/admin") or next_url == "/admin/login":
-                next_url = url_for("admin_dashboard")
-            return redirect(next_url)
-        flash("Kullanıcı adı veya şifre hatalı.", "error")
+        client_ip = _get_client_ip()
+        now = datetime.datetime.utcnow()
+
+        with get_db() as conn:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute(
+                "SELECT failed_count, locked_until FROM admin_login_attempts WHERE ip_address = %s",
+                (client_ip,),
+            )
+            attempt_row = cursor.fetchone()
+
+            if attempt_row and attempt_row["locked_until"] and attempt_row["locked_until"] > now:
+                remaining_seconds = int((attempt_row["locked_until"] - now).total_seconds())
+                remaining_minutes = max(1, (remaining_seconds + 59) // 60)
+                cursor.close()
+                flash(
+                    f"Çok fazla başarısız giriş denemesi! Lütfen {remaining_minutes} dakika sonra tekrar deneyin.",
+                    "error",
+                )
+                return render_template("admin/login.html"), 429
+
+            username = request.form.get("username", "").strip()
+            password = request.form.get("password", "")
+            if secrets.compare_digest(username, ADMIN_USERNAME) and secrets.compare_digest(
+                password, ADMIN_PASSWORD
+            ):
+                cursor.execute(
+                    "DELETE FROM admin_login_attempts WHERE ip_address = %s",
+                    (client_ip,),
+                )
+                conn.commit()
+                cursor.close()
+
+                session.clear()
+                session["admin_authenticated"] = True
+                session["admin_username"] = username
+                next_url = request.args.get("next") or request.form.get("next")
+                if not next_url or not next_url.startswith("/admin") or next_url == "/admin/login":
+                    next_url = url_for("admin_dashboard")
+                return redirect(next_url)
+
+            # Başarısız deneme: sayacı artır veya süresi dolmuş kilitten sonra 1'den başlat
+            prev_failed = attempt_row["failed_count"] if attempt_row else 0
+            if attempt_row and attempt_row["locked_until"] and attempt_row["locked_until"] <= now:
+                prev_failed = 0
+            new_failed = prev_failed + 1
+
+            if new_failed >= ADMIN_MAX_FAILED_ATTEMPTS:
+                locked_until = now + datetime.timedelta(minutes=ADMIN_LOCKOUT_MINUTES)
+                cursor.execute(
+                    """
+                    INSERT INTO admin_login_attempts (ip_address, failed_count, locked_until)
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE failed_count = VALUES(failed_count), locked_until = VALUES(locked_until)
+                    """,
+                    (client_ip, new_failed, locked_until),
+                )
+                conn.commit()
+                cursor.close()
+                flash(
+                    f"5 kez hatalı giriş yaptınız. IP adresiniz {ADMIN_LOCKOUT_MINUTES} dakika süreyle kilitlendi.",
+                    "error",
+                )
+                return render_template("admin/login.html"), 429
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO admin_login_attempts (ip_address, failed_count, locked_until)
+                    VALUES (%s, %s, NULL)
+                    ON DUPLICATE KEY UPDATE failed_count = VALUES(failed_count), locked_until = NULL
+                    """,
+                    (client_ip, new_failed),
+                )
+                conn.commit()
+                cursor.close()
+                remaining_attempts = ADMIN_MAX_FAILED_ATTEMPTS - new_failed
+                flash(
+                    f"Kullanıcı adı veya şifre hatalı. (Kalan deneme hakkı: {remaining_attempts})",
+                    "error",
+                )
     return render_template("admin/login.html")
 
 
@@ -1063,9 +1270,165 @@ def admin_categories():
             cursor.close()
 
 
+def _serialize_order_rows(rows: List[Dict[str, Any]], *, for_json: bool = False) -> List[Dict[str, Any]]:
+    orders_by_id: Dict[int, Dict[str, Any]] = {}
+    ordered_ids: List[int] = []
+
+    for row in rows:
+        oid = int(row["order_id"])
+        if oid not in orders_by_id:
+            ordered_ids.append(oid)
+            norm_status = normalize_order_status(row.get("status")) or "PENDING"
+            created_dt = row.get("created_at")
+            shipping_addr = (row.get("shipping_address") or "Belirtilmemiş").strip()
+            lat = float(row["latitude"]) if row.get("latitude") is not None else None
+            lng = float(row["longitude"]) if row.get("longitude") is not None else None
+
+            if lat is not None and lng is not None:
+                maps_target = f"{lat},{lng}"
+            else:
+                maps_target = quote_plus(shipping_addr)
+
+            google_maps_url = f"https://www.google.com/maps/dir/?api=1&destination={maps_target}"
+            google_maps_embed_url = f"https://maps.google.com/maps?q={maps_target}&hl=tr&z=15&output=embed"
+
+            orders_by_id[oid] = {
+                "order_id": oid,
+                "total_price": float(row["total_price"] or 0),
+                "shipping_address": shipping_addr,
+                "latitude": lat,
+                "longitude": lng,
+                "google_maps_url": google_maps_url,
+                "google_maps_embed_url": google_maps_embed_url,
+                "payment_method": row.get("payment_method") or "Nakit",
+                "status": norm_status,
+                "status_label": order_status_label(norm_status),
+                "is_active": norm_status in ACTIVE_ORDER_STATUSES,
+                "user_name": row.get("user_name") or "Misafir Kullanıcı",
+                "user_email": row.get("user_email") or "-",
+                "created_at": (
+                    created_dt.strftime("%Y-%m-%d %H:%M:%S")
+                    if (for_json and created_dt)
+                    else created_dt
+                ),
+                "created_at_formatted": (
+                    created_dt.strftime("%d.%m.%Y • %H:%M") if created_dt else "Tarih belirtilmedi"
+                ),
+                "total_quantity": 0,
+                "items": [],
+            }
+        qty = int(row.get("quantity") or 0)
+        unit_price = float(row.get("price") or 0)
+        image_name = row.get("product_image")
+        orders_by_id[oid]["total_quantity"] += qty
+        orders_by_id[oid]["items"].append({
+            "name": row.get("product_name") or "Ürün",
+            "image": image_name,
+            "image_url": url_for("static", filename=f"uploads/{image_name}") if image_name else None,
+            "quantity": qty,
+            "price": unit_price,
+            "line_total": qty * unit_price,
+        })
+
+    return [orders_by_id[oid] for oid in ordered_ids]
+
+
+def _get_order_dashboard_stats(cursor) -> Dict[str, Any]:
+    cursor.execute(
+        """
+        SELECT status, COUNT(*) as cnt, COALESCE(SUM(total_price), 0) as total_sum
+        FROM orders
+        GROUP BY status
+        """
+    )
+    counts = {code: 0 for code in ALL_ORDER_STATUSES}
+    revenue = 0.0
+    for row in cursor.fetchall():
+        code = normalize_order_status(row["status"]) or "PENDING"
+        cnt = int(row["cnt"] or 0)
+        counts[code] = counts.get(code, 0) + cnt
+        if code != "CANCELLED":
+            revenue += float(row["total_sum"] or 0)
+
+    active_count = counts["PENDING"] + counts["PREPARING"] + counts["ON_THE_WAY"]
+    history_count = counts["DELIVERED"] + counts["CANCELLED"]
+    return {
+        "all": active_count + history_count,
+        "active": active_count,
+        "history": history_count,
+        "pending": counts["PENDING"],
+        "preparing": counts["PREPARING"],
+        "on_way": counts["ON_THE_WAY"],
+        "delivered": counts["DELIVERED"],
+        "cancelled": counts["CANCELLED"],
+        "revenue": revenue,
+    }
+
+
 @app.route("/admin/orders")
 @admin_required
 def admin_orders():
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            # Ana ekranda YALNIZCA aktif siparişler (eskiden yeniye - en uzun bekleyen en üstte)
+            cursor.execute(
+                """
+                SELECT 
+                    o.id as order_id, 
+                    o.total_price, 
+                    o.shipping_address,
+                    o.latitude,
+                    o.longitude,
+                    o.payment_method,
+                    o.status,
+                    o.created_at, 
+                    u.name as user_name,
+                    u.email as user_email,
+                    oi.quantity, 
+                    oi.price, 
+                    p.name as product_name,
+                    p.image as product_image
+                FROM orders o
+                LEFT JOIN users u ON o.user_id = u.id
+                JOIN order_items oi ON o.id = oi.order_id
+                JOIN products p ON oi.product_id = p.id
+                WHERE o.status IN ('PENDING', 'PREPARING', 'ON_THE_WAY')
+                ORDER BY o.created_at ASC, o.id ASC
+                """
+            )
+            active_orders = _serialize_order_rows(cursor.fetchall(), for_json=False)
+            stats = _get_order_dashboard_stats(cursor)
+            return render_template("admin/orders.html", active_orders=active_orders, stats=stats)
+        except Exception:
+            logger.exception("Admin siparişleri yüklenirken hata")
+            flash("Siparişler yüklenemedi.", "error")
+            return render_template(
+                "admin/orders.html",
+                active_orders=[],
+                stats={
+                    "all": 0,
+                    "active": 0,
+                    "history": 0,
+                    "pending": 0,
+                    "preparing": 0,
+                    "on_way": 0,
+                    "delivered": 0,
+                    "cancelled": 0,
+                    "revenue": 0.0,
+                },
+            )
+        finally:
+            cursor.close()
+
+
+@app.get("/api/admin/orders/active")
+@admin_required
+def api_admin_active_orders():
+    """
+    Yalnızca aktif siparişleri ('PENDING', 'PREPARING', 'ON_THE_WAY')
+    eskiden yeniye (en uzun süredir bekleyen en üstte) döner.
+    """
     with get_db() as conn:
         cursor = conn.cursor(dictionary=True)
         try:
@@ -1075,6 +1438,8 @@ def admin_orders():
                     o.id as order_id, 
                     o.total_price, 
                     o.shipping_address,
+                    o.latitude,
+                    o.longitude,
                     o.payment_method,
                     o.status,
                     o.created_at, 
@@ -1082,41 +1447,186 @@ def admin_orders():
                     u.email as user_email,
                     oi.quantity, 
                     oi.price, 
-                    p.name as product_name 
+                    p.name as product_name,
+                    p.image as product_image
                 FROM orders o
                 LEFT JOIN users u ON o.user_id = u.id
                 JOIN order_items oi ON o.id = oi.order_id
                 JOIN products p ON oi.product_id = p.id
-                ORDER BY o.created_at DESC
+                WHERE o.status IN ('PENDING', 'PREPARING', 'ON_THE_WAY')
+                ORDER BY o.created_at ASC, o.id ASC
                 """
             )
-            rows = cursor.fetchall()
-
-            orders: Dict[int, Dict[str, Any]] = {}
-            for row in rows:
-                oid = row["order_id"]
-                if oid not in orders:
-                    orders[oid] = {
-                        "order_id": oid,
-                        "total_price": float(row["total_price"]),
-                        "shipping_address": row["shipping_address"] or "Belirtilmemiş",
-                        "payment_method": row["payment_method"] or "Nakit",
-                        "status": row["status"] or "Hazırlanıyor",
-                        "user_name": row["user_name"] or "Misafir Kullanıcı",
-                        "user_email": row["user_email"] or "-",
-                        "created_at": row["created_at"],
-                        "items": [],
-                    }
-                orders[oid]["items"].append({
-                    "name": row["product_name"],
-                    "quantity": row["quantity"],
-                    "price": float(row["price"]),
-                })
-            return render_template("admin/orders.html", orders=orders)
+            orders_list = _serialize_order_rows(cursor.fetchall(), for_json=True)
+            stats = _get_order_dashboard_stats(cursor)
+            return jsonify({
+                "success": True,
+                "active_count": stats["active"],
+                "stats": stats,
+                "orders": orders_list,
+            }), 200
         except Exception:
-            logger.exception("Admin siparişleri yüklenirken hata")
-            flash("Siparişler yüklenemedi.", "error")
-            return render_template("admin/orders.html", orders={})
+            logger.exception("Aktif siparişler API hatası")
+            return jsonify({"success": False, "error": "Aktif siparişler yüklenemedi."}), 500
+        finally:
+            cursor.close()
+
+
+@app.get("/api/admin/orders/history")
+@admin_required
+def api_admin_history_orders():
+    """
+    Yalnızca tamamlanmış ve iptal edilen siparişleri ('DELIVERED', 'CANCELLED')
+    yeniden eskiye sıralı, filtreleme ve sayfalama (pagination) destekli döner.
+    """
+    status_filter = (request.args.get("status") or "ALL").strip().upper()
+    search_query = (request.args.get("search") or request.args.get("q") or "").strip()
+    start_date = (request.args.get("start_date") or "").strip()
+    end_date = (request.args.get("end_date") or "").strip()
+
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except ValueError:
+        page = 1
+
+    try:
+        limit = min(100, max(1, int(request.args.get("limit", 10))))
+    except ValueError:
+        limit = 10
+
+    where_clauses = []
+    params: List[Any] = []
+
+    normalized_filter = normalize_order_status(status_filter)
+    if normalized_filter in HISTORY_ORDER_STATUSES:
+        where_clauses.append("o.status = %s")
+        params.append(normalized_filter)
+    else:
+        where_clauses.append("o.status IN ('DELIVERED', 'CANCELLED')")
+
+    if start_date:
+        where_clauses.append("DATE(o.created_at) >= %s")
+        params.append(start_date)
+
+    if end_date:
+        where_clauses.append("DATE(o.created_at) <= %s")
+        params.append(end_date)
+
+    if search_query:
+        cleaned_id = search_query.lstrip("#").strip()
+        like_pattern = f"%{search_query}%"
+        if cleaned_id.isdigit():
+            where_clauses.append(
+                """(
+                    o.id = %s
+                    OR COALESCE(u.name, '') LIKE %s
+                    OR COALESCE(u.email, '') LIKE %s
+                    OR COALESCE(o.shipping_address, '') LIKE %s
+                    OR EXISTS (
+                        SELECT 1 FROM order_items oi_s
+                        JOIN products p_s ON oi_s.product_id = p_s.id
+                        WHERE oi_s.order_id = o.id AND p_s.name LIKE %s
+                    )
+                )"""
+            )
+            params.extend([int(cleaned_id), like_pattern, like_pattern, like_pattern, like_pattern])
+        else:
+            where_clauses.append(
+                """(
+                    COALESCE(u.name, '') LIKE %s
+                    OR COALESCE(u.email, '') LIKE %s
+                    OR COALESCE(o.shipping_address, '') LIKE %s
+                    OR EXISTS (
+                        SELECT 1 FROM order_items oi_s
+                        JOIN products p_s ON oi_s.product_id = p_s.id
+                        WHERE oi_s.order_id = o.id AND p_s.name LIKE %s
+                    )
+                )"""
+            )
+            params.extend([like_pattern, like_pattern, like_pattern, like_pattern])
+
+    where_sql = " AND ".join(where_clauses)
+
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute(
+                f"""
+                SELECT COUNT(DISTINCT o.id) as total_items
+                FROM orders o
+                LEFT JOIN users u ON o.user_id = u.id
+                WHERE {where_sql}
+                """,
+                tuple(params),
+            )
+            total_row = cursor.fetchone()
+            total_items = int(total_row["total_items"] or 0) if total_row else 0
+            total_pages = max(1, (total_items + limit - 1) // limit)
+            if page > total_pages:
+                page = total_pages
+            offset = (page - 1) * limit
+
+            cursor.execute(
+                f"""
+                SELECT o.id
+                FROM orders o
+                LEFT JOIN users u ON o.user_id = u.id
+                WHERE {where_sql}
+                ORDER BY o.created_at DESC, o.id DESC
+                LIMIT %s OFFSET %s
+                """,
+                tuple(params + [limit, offset]),
+            )
+            page_ids = [int(r["id"]) for r in cursor.fetchall()]
+
+            orders_list: List[Dict[str, Any]] = []
+            if page_ids:
+                id_placeholders = ", ".join(["%s"] * len(page_ids))
+                cursor.execute(
+                    f"""
+                    SELECT 
+                        o.id as order_id, 
+                        o.total_price, 
+                        o.shipping_address,
+                        o.latitude,
+                        o.longitude,
+                        o.payment_method,
+                        o.status,
+                        o.created_at, 
+                        u.name as user_name,
+                        u.email as user_email,
+                        oi.quantity, 
+                        oi.price, 
+                        p.name as product_name,
+                        p.image as product_image
+                    FROM orders o
+                    LEFT JOIN users u ON o.user_id = u.id
+                    JOIN order_items oi ON o.id = oi.order_id
+                    JOIN products p ON oi.product_id = p.id
+                    WHERE o.id IN ({id_placeholders})
+                    ORDER BY o.created_at DESC, o.id DESC
+                    """,
+                    tuple(page_ids),
+                )
+                orders_list = _serialize_order_rows(cursor.fetchall(), for_json=True)
+
+            stats = _get_order_dashboard_stats(cursor)
+            return jsonify({
+                "success": True,
+                "orders": orders_list,
+                "stats": stats,
+                "pagination": {
+                    "page": page,
+                    "limit": limit,
+                    "total_items": total_items,
+                    "total_pages": total_pages,
+                    "has_prev": page > 1,
+                    "has_next": page < total_pages,
+                },
+            }), 200
+        except Exception:
+            logger.exception("Sipariş geçmişi API hatası")
+            return jsonify({"success": False, "error": "Sipariş geçmişi yüklenemedi."}), 500
         finally:
             cursor.close()
 
@@ -1146,64 +1656,312 @@ def handle_internal_error(e):
         return jsonify({"error": "Sunucuda beklenmeyen bir hata meydana geldi."}), 500
     return "Sunucuda beklenmeyen bir hata meydana geldi.", 500
 
+def _perform_order_status_update(order_id: int, raw_status: str) -> Dict[str, Any]:
+    new_status = normalize_order_status(raw_status)
+    if not new_status or new_status not in ALL_ORDER_STATUSES:
+        return {
+            "success": False,
+            "status_code": 400,
+            "error": "Geçersiz sipariş durumu. İzin verilenler: PENDING, PREPARING, ON_THE_WAY, DELIVERED, CANCELLED.",
+        }
+
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            conn.start_transaction()
+            cursor.execute(
+                "SELECT status FROM orders WHERE id = %s FOR UPDATE",
+                (order_id,),
+            )
+            order = cursor.fetchone()
+            if not order:
+                conn.rollback()
+                return {
+                    "success": False,
+                    "status_code": 404,
+                    "error": "Sipariş bulunamadı.",
+                }
+
+            old_status = normalize_order_status(order["status"]) or "PENDING"
+            if old_status != new_status:
+                cursor.execute(
+                    "UPDATE orders SET status = %s WHERE id = %s",
+                    (new_status, order_id),
+                )
+                # Sipariş iptal edildiyse stokları iade et
+                if new_status == "CANCELLED" and old_status != "CANCELLED":
+                    cursor.execute(
+                        "SELECT product_id, quantity FROM order_items WHERE order_id = %s",
+                        (order_id,),
+                    )
+                    for item in cursor.fetchall():
+                        cursor.execute(
+                            "UPDATE products SET stock = stock + %s WHERE id = %s",
+                            (item["quantity"], item["product_id"]),
+                        )
+                # İptal edilmiş bir sipariş tekrar aktif/teslim duruma alınırsa stoktan düş
+                elif old_status == "CANCELLED" and new_status != "CANCELLED":
+                    cursor.execute(
+                        "SELECT product_id, quantity FROM order_items WHERE order_id = %s",
+                        (order_id,),
+                    )
+                    for item in cursor.fetchall():
+                        cursor.execute(
+                            "UPDATE products SET stock = GREATEST(0, stock - %s) WHERE id = %s",
+                            (item["quantity"], item["product_id"]),
+                        )
+
+            conn.commit()
+            stats = _get_order_dashboard_stats(cursor)
+            status_label = order_status_label(new_status)
+            return {
+                "success": True,
+                "status_code": 200,
+                "order_id": order_id,
+                "old_status": old_status,
+                "status": new_status,
+                "status_label": status_label,
+                "is_active": new_status in ACTIVE_ORDER_STATUSES,
+                "active_count": stats["active"],
+                "stats": stats,
+                "message": f"Sipariş #{order_id} durumu '{status_label}' olarak güncellendi.",
+            }
+        except Exception:
+            conn.rollback()
+            logger.exception("Sipariş durumu güncellenirken hata")
+            return {
+                "success": False,
+                "status_code": 500,
+                "error": "Sipariş durumu güncellenemedi.",
+            }
+        finally:
+            cursor.close()
+
+
+@app.route("/api/admin/orders/<int:order_id>/status", methods=["PATCH", "POST"])
+@admin_required
+def api_admin_update_order_status(order_id: int):
+    payload = request.get_json(silent=True) or {}
+    raw_status = (payload.get("status") or request.form.get("status") or "").strip()
+    result = _perform_order_status_update(order_id, raw_status)
+    http_code = result.pop("status_code", 200)
+    return jsonify(result), http_code
+
+
 @app.post("/admin/orders/status/<int:order_id>")
 @admin_required
 def admin_update_order_status(order_id: int):
-    new_status = request.form.get("status", "").strip()
-    valid_statuses = {"Hazırlanıyor", "Yolda", "Teslim Edildi", "İptal Edildi"}
+    raw_status = request.form.get("status", "").strip()
+    result = _perform_order_status_update(order_id, raw_status)
+    if result.get("success"):
+        flash(result["message"], "success")
+    else:
+        flash(result.get("error", "Sipariş durumu güncellenemedi."), "error")
+    return redirect(url_for("admin_orders"))
 
-    if new_status in valid_statuses:
+
+# ---------------------------------------------------------------------------
+# 6.1 Kurye Dağıtım Uygulaması (Sadece Teslim Edildi Yetkisi + Google Maps)
+# ---------------------------------------------------------------------------
+COURIER_PASSWORD = os.getenv("COURIER_PASSWORD") or ADMIN_PASSWORD
+
+
+def courier_required(view):
+    """Kurye veya Admin oturumu gerektiren görünümler ve API'ler için yetki kontrolü."""
+    @wraps(view)
+    def wrapped_view(*args, **kwargs):
+        if not (session.get("courier_authenticated") or session.get("admin_authenticated")):
+            if request.path.startswith("/api/courier"):
+                return jsonify({"success": False, "error": "Yetkisiz erişim. Lütfen kurye girişi yapın."}), 401
+            return redirect(url_for("courier_login"))
+        return view(*args, **kwargs)
+
+    return wrapped_view
+
+
+@app.route("/kurye/login", methods=["GET", "POST"])
+@app.route("/courier/login", methods=["GET", "POST"])
+def courier_login():
+    if session.get("courier_authenticated") or session.get("admin_authenticated"):
+        return redirect(url_for("courier_dashboard"))
+
+    if request.method == "POST":
+        client_ip = _get_client_ip()
+        now = datetime.datetime.utcnow()
+
         with get_db() as conn:
             cursor = conn.cursor(dictionary=True)
-            try:
-                conn.start_transaction()
-                cursor.execute(
-                    "SELECT status FROM orders WHERE id = %s FOR UPDATE",
-                    (order_id,),
-                )
-                order = cursor.fetchone()
-                if not order:
-                    conn.rollback()
-                    flash("Sipariş bulunamadı.", "error")
-                    return redirect(url_for("admin_orders"))
+            cursor.execute(
+                "SELECT failed_count, locked_until FROM admin_login_attempts WHERE ip_address = %s",
+                (client_ip,),
+            )
+            attempt_row = cursor.fetchone()
 
-                old_status = order["status"]
-                if old_status != new_status:
-                    cursor.execute(
-                        "UPDATE orders SET status = %s WHERE id = %s",
-                        (new_status, order_id),
-                    )
-                    # Sipariş iptal edildiyse stokları iade et
-                    if new_status == "İptal Edildi" and old_status != "İptal Edildi":
-                        cursor.execute(
-                            "SELECT product_id, quantity FROM order_items WHERE order_id = %s",
-                            (order_id,),
-                        )
-                        for item in cursor.fetchall():
-                            cursor.execute(
-                                "UPDATE products SET stock = stock + %s WHERE id = %s",
-                                (item["quantity"], item["product_id"]),
-                            )
-                    # İptal edilmiş bir sipariş tekrar aktif duruma alınırsa stoktan düş
-                    elif old_status == "İptal Edildi" and new_status != "İptal Edildi":
-                        cursor.execute(
-                            "SELECT product_id, quantity FROM order_items WHERE order_id = %s",
-                            (order_id,),
-                        )
-                        for item in cursor.fetchall():
-                            cursor.execute(
-                                "UPDATE products SET stock = GREATEST(0, stock - %s) WHERE id = %s",
-                                (item["quantity"], item["product_id"]),
-                            )
-
-                conn.commit()
-                flash(f"Sipariş #{order_id} durumu '{new_status}' olarak güncellendi.", "success")
-            except Exception:
-                conn.rollback()
-                flash("Sipariş durumu güncellenemedi.", "error")
-            finally:
+            if attempt_row and attempt_row["locked_until"] and attempt_row["locked_until"] > now:
+                remaining_seconds = int((attempt_row["locked_until"] - now).total_seconds())
+                remaining_minutes = max(1, (remaining_seconds + 59) // 60)
                 cursor.close()
-    return redirect(url_for("admin_orders"))
+                flash(
+                    f"Çok fazla başarısız deneme! Lütfen {remaining_minutes} dakika sonra tekrar deneyin.",
+                    "error",
+                )
+                return render_template("courier/login.html"), 429
+
+            password = request.form.get("password", "")
+            if secrets.compare_digest(password, COURIER_PASSWORD) or secrets.compare_digest(
+                password, ADMIN_PASSWORD
+            ):
+                cursor.execute(
+                    "DELETE FROM admin_login_attempts WHERE ip_address = %s",
+                    (client_ip,),
+                )
+                conn.commit()
+                cursor.close()
+                session["courier_authenticated"] = True
+                return redirect(url_for("courier_dashboard"))
+
+            prev_failed = attempt_row["failed_count"] if attempt_row else 0
+            if attempt_row and attempt_row["locked_until"] and attempt_row["locked_until"] <= now:
+                prev_failed = 0
+            new_failed = prev_failed + 1
+
+            if new_failed >= ADMIN_MAX_FAILED_ATTEMPTS:
+                locked_until = now + datetime.timedelta(minutes=ADMIN_LOCKOUT_MINUTES)
+                cursor.execute(
+                    """
+                    INSERT INTO admin_login_attempts (ip_address, failed_count, locked_until)
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE failed_count = VALUES(failed_count), locked_until = VALUES(locked_until)
+                    """,
+                    (client_ip, new_failed, locked_until),
+                )
+                conn.commit()
+                cursor.close()
+                flash(
+                    f"5 kez hatalı şifre girdiniz. IP adresiniz {ADMIN_LOCKOUT_MINUTES} dakika kilitlendi.",
+                    "error",
+                )
+                return render_template("courier/login.html"), 429
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO admin_login_attempts (ip_address, failed_count, locked_until)
+                    VALUES (%s, %s, NULL)
+                    ON DUPLICATE KEY UPDATE failed_count = VALUES(failed_count), locked_until = NULL
+                    """,
+                    (client_ip, new_failed),
+                )
+                conn.commit()
+                cursor.close()
+                remaining_attempts = ADMIN_MAX_FAILED_ATTEMPTS - new_failed
+                flash(f"Kurye şifresi hatalı. (Kalan deneme hakkı: {remaining_attempts})", "error")
+
+    return render_template("courier/login.html")
+
+
+@app.get("/kurye/logout")
+@app.get("/courier/logout")
+def courier_logout():
+    session.pop("courier_authenticated", None)
+    flash("Kurye oturumu kapatıldı.", "success")
+    return redirect(url_for("courier_login"))
+
+
+@app.get("/kurye")
+@app.get("/courier")
+@courier_required
+def courier_dashboard():
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute(
+                """
+                SELECT 
+                    o.id as order_id, 
+                    o.total_price, 
+                    o.shipping_address,
+                    o.latitude,
+                    o.longitude,
+                    o.payment_method,
+                    o.status,
+                    o.created_at, 
+                    u.name as user_name,
+                    u.email as user_email,
+                    oi.quantity, 
+                    oi.price, 
+                    p.name as product_name,
+                    p.image as product_image
+                FROM orders o
+                LEFT JOIN users u ON o.user_id = u.id
+                JOIN order_items oi ON o.id = oi.order_id
+                JOIN products p ON oi.product_id = p.id
+                WHERE o.status IN ('PENDING', 'PREPARING', 'ON_THE_WAY')
+                ORDER BY o.created_at ASC, o.id ASC
+                """
+            )
+            active_orders = _serialize_order_rows(cursor.fetchall(), for_json=False)
+            return render_template("courier/orders.html", active_orders=active_orders)
+        except Exception:
+            logger.exception("Kurye siparişleri yüklenirken hata")
+            return render_template("courier/orders.html", active_orders=[])
+        finally:
+            cursor.close()
+
+
+@app.get("/api/courier/orders")
+@courier_required
+def api_courier_active_orders():
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute(
+                """
+                SELECT 
+                    o.id as order_id, 
+                    o.total_price, 
+                    o.shipping_address,
+                    o.latitude,
+                    o.longitude,
+                    o.payment_method,
+                    o.status,
+                    o.created_at, 
+                    u.name as user_name,
+                    u.email as user_email,
+                    oi.quantity, 
+                    oi.price, 
+                    p.name as product_name,
+                    p.image as product_image
+                FROM orders o
+                LEFT JOIN users u ON o.user_id = u.id
+                JOIN order_items oi ON o.id = oi.order_id
+                JOIN products p ON oi.product_id = p.id
+                WHERE o.status IN ('PENDING', 'PREPARING', 'ON_THE_WAY')
+                ORDER BY o.created_at ASC, o.id ASC
+                """
+            )
+            orders_list = _serialize_order_rows(cursor.fetchall(), for_json=True)
+            return jsonify({
+                "success": True,
+                "active_count": len(orders_list),
+                "orders": orders_list,
+            }), 200
+        except Exception:
+            logger.exception("Kurye aktif sipariş API hatası")
+            return jsonify({"success": False, "error": "Siparişler yüklenemedi."}), 500
+        finally:
+            cursor.close()
+
+
+@app.post("/api/courier/orders/<int:order_id>/deliver")
+@courier_required
+def api_courier_deliver_order(order_id: int):
+    """
+    Kurye uygulaması YALNIZCA siparişi 'DELIVERED' (Teslim Edildi) durumuna çevirebilir.
+    İptal etme veya başka bir duruma alma yetkisi yoktur.
+    """
+    result = _perform_order_status_update(order_id, "DELIVERED")
+    http_code = result.pop("status_code", 200)
+    return jsonify(result), http_code
 
 # --- KATEGORİ DÜZENLEME ---
 @app.route("/admin/categories/edit/<int:category_id>", methods=["GET", "POST"])

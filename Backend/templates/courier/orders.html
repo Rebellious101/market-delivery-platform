@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kurye Dağıtım Uygulaması | Prestij Market</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .courier-topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 18px clamp(16px, 4vw, 48px);
+            background: #0f2f26;
+            color: #fff;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 4px 18px rgba(0,0,0,0.15);
+        }
+        .courier-shell {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 24px clamp(12px, 3vw, 28px) 64px;
+        }
+        .courier-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+        }
+        .map-embed-wrap {
+            margin: 12px 0;
+            border: 1px solid #d5e3da;
+            border-radius: 10px;
+            overflow: hidden;
+            background: #eef4f0;
+        }
+        .map-embed-frame {
+            width: 100%;
+            height: 230px;
+            border: 0;
+            display: block;
+        }
+        .map-actions-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 14px;
+            background: #f4f9f6;
+            border-top: 1px solid #e1ebe4;
+        }
+        .btn-google-maps {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 11px 16px;
+            border-radius: 8px;
+            background: #1a73e8;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 800;
+            text-decoration: none;
+            box-shadow: 0 4px 12px rgba(26, 115, 232, 0.25);
+        }
+        .btn-google-maps:hover {
+            background: #1557b0;
+        }
+        .btn-deliver-only {
+            width: 100%;
+            padding: 16px 20px;
+            border: 0;
+            border-radius: 10px;
+            background: #228b4e;
+            color: #fff;
+            font: inherit;
+            font-size: 16px;
+            font-weight: 800;
+            cursor: pointer;
+            box-shadow: 0 6px 18px rgba(34, 139, 78, 0.25);
+            transition: transform 0.15s ease, background 0.15s ease;
+        }
+        .btn-deliver-only:hover {
+            background: #1b6f3e;
+            transform: translateY(-1px);
+        }
+    </style>
+</head>
+<body>
+<header class="courier-topbar">
+    <div>
+        <p class="eyebrow" style="margin-bottom: 4px;">🛵 PRESTİJ KURYE DAĞITIM</p>
+        <h1 style="margin: 0; font-size: 21px; text-align: left;">Teslimat Bekleyen Siparişler</h1>
+    </div>
+    <div style="display: flex; align-items: center; gap: 10px;">
+        <span class="primary-tab-badge badge-urgent" id="courierActiveCount">{{ active_orders|length }}</span>
+        <button type="button" class="button button-secondary" onclick="fetchCourierOrders()" style="padding: 8px 12px; font-size: 13px;">↻ Yenile</button>
+        {% if session.get('admin_authenticated') %}
+            <a href="{{ url_for('admin_orders') }}" class="button button-secondary" style="padding: 8px 12px; font-size: 13px;">← Admin Paneli</a>
+        {% endif %}
+        <a href="{{ url_for('courier_logout') }}" class="button button-secondary" style="padding: 8px 12px; font-size: 13px;">Çıkış</a>
+    </div>
+</header>
+
+<main class="courier-shell">
+    <div id="toastContainer" class="toast-container"></div>
+
+    <div id="courierOrdersGrid" class="courier-grid">
+        {% for order in active_orders %}
+            {% set status_class = 'status-pending' if order.status == 'PENDING' else ('status-preparing' if order.status == 'PREPARING' else 'status-onway') %}
+            <article class="order-card {{ status_class }}" id="courier-card-{{ order.order_id }}" data-order-id="{{ order.order_id }}">
+                <!-- 1. SİPARİŞ BAŞLIĞI VE TAHSİLAT BİLGİSİ -->
+                <div class="order-card-header">
+                    <div>
+                        <div class="order-id-row">
+                            <span class="order-number-badge">#{{ order.order_id }}</span>
+                            <span class="order-status-pill {{ status_class }}">
+                                {% if order.status == 'PENDING' %}🔔 Beklemede
+                                {% elif order.status == 'PREPARING' %}⏳ Hazırlanıyor
+                                {% else %}🛵 Kuryede{% endif %}
+                            </span>
+                        </div>
+                        <p class="order-timestamp">🕒 {{ order.created_at_formatted }} • <strong>👤 {{ order.user_name }}</strong></p>
+                    </div>
+
+                    <div class="order-total-box">
+                        <span class="order-total-label">Tahsil Edilecek</span>
+                        <strong class="order-total-amount">{{ '%.2f'|format(order.total_price) }} TL</strong>
+                        <span class="payment-badge {% if 'Kart' in order.payment_method %}payment-card{% else %}payment-cash{% endif %}">
+                            {% if 'Kart' in order.payment_method %}💳 {{ order.payment_method }}{% else %}💵 {{ order.payment_method }}{% endif %}
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 2. CANLI GOOGLE MAPS HARİTASI VE YOL TARİFİ -->
+                <div class="map-embed-wrap">
+                    <iframe
+                        class="map-embed-frame"
+                        loading="lazy"
+                        referrerpolicy="no-referrer-when-downgrade"
+                        src="{{ order.google_maps_embed_url }}"
+                    ></iframe>
+                    <div class="map-actions-bar">
+                        <div style="flex: 1; font-size: 13px; color: #173f35;">
+                            <strong>📍 Adres:</strong> {{ order.shipping_address }}
+                        </div>
+                        <a href="{{ order.google_maps_url }}" target="_blank" rel="noopener" class="btn-google-maps">
+                            🗺️ Google Maps'te Aç
+                        </a>
+                    </div>
+                </div>
+
+                <!-- 3. SİPARİŞ EDİLEN ÜRÜNLER (POŞET KONTROLÜ) -->
+                <div class="order-items-section">
+                    <div class="order-items-header">
+                        <span>📦 Teslim Edilecek Ürünler ({{ order.total_quantity }} adet)</span>
+                        <span>Adet</span>
+                    </div>
+                    <div class="order-items-list">
+                        {% for item in order['items'] %}
+                            <div class="order-item-row">
+                                <div class="order-item-left">
+                                    {% if item.image %}
+                                        <img src="{{ url_for('static', filename='uploads/' ~ item.image) }}" alt="{{ item.name }}" class="order-item-thumb">
+                                    {% else %}
+                                        <div class="order-item-thumb placeholder">ÜRÜN</div>
+                                    {% endif %}
+                                    <strong class="order-item-name">{{ item.name }}</strong>
+                                </div>
+                                <div class="order-item-right">
+                                    <span class="qty-badge">x{{ item.quantity }}</span>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <!-- 4. SADECE "TESLİM EDİLDİ" BUTONU -->
+                <div style="margin-top: 10px;">
+                    <button
+                        type="button"
+                        class="btn-deliver-only"
+                        onclick="markDeliveredByCourier({{ order.order_id }})"
+                    >
+                        ✅ TESLİM EDİLDİ OLARAK İŞARETLE
+                    </button>
+                </div>
+            </article>
+        {% endfor %}
+    </div>
+
+    <div id="courierEmptyState" class="panel empty-state" {% if active_orders|length > 0 %}style="display: none;"{% endif %}>
+        <span class="empty-icon">🛵</span>
+        <h2>Dağıtım bekleyen sipariş yok</h2>
+        <p class="muted">Yeni bir sipariş geldiğinde bu ekran otomatik olarak güncellenecektir.</p>
+    </div>
+</main>
+
+<script>
+    const CSRF_TOKEN = "{{ csrf_token() }}";
+    let knownCourierOrderIds = new Set([{% for o in active_orders %}{{ o.order_id }},{% endfor %}]);
+
+    function showToast(message, type = 'success') {
+        const container = document.getElementById('toastContainer');
+        if (!container) return;
+        const toast = document.createElement('div');
+        toast.className = `toast-item toast-${type}`;
+        toast.textContent = message;
+        container.appendChild(toast);
+        setTimeout(() => {
+            toast.classList.add('toast-hide');
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    }
+
+    function playNewOrderChime() {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const playTone = (freq, start, duration) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+                gain.gain.setValueAtTime(0.22, ctx.currentTime + start);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(ctx.currentTime + start);
+                osc.stop(ctx.currentTime + start + duration);
+            };
+            playTone(659.25, 0, 0.22);
+            playTone(880.0, 0.24, 0.35);
+        } catch (_) {}
+    }
+
+    async function markDeliveredByCourier(orderId) {
+        if (!confirm(`Sipariş #${orderId} müşteriye teslim edildi mi?`)) {
+            return;
+        }
+        const card = document.getElementById(`courier-card-${orderId}`);
+        if (card) card.classList.add('card-updating');
+
+        try {
+            const response = await fetch(`/api/courier/orders/${orderId}/deliver`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': CSRF_TOKEN
+                }
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                if (card) card.classList.remove('card-updating');
+                showToast(data.error || 'İşlem başarısız oldu.', 'error');
+                return;
+            }
+
+            showToast(`Sipariş #${orderId} teslim edildi!`, 'success');
+            knownCourierOrderIds.delete(orderId);
+            const badge = document.getElementById('courierActiveCount');
+            if (badge && data.active_count !== undefined) {
+                badge.textContent = data.active_count;
+            }
+
+            if (card) {
+                card.classList.remove('card-updating');
+                card.classList.add('card-removing');
+                setTimeout(() => {
+                    card.remove();
+                    const remaining = document.querySelectorAll('#courierOrdersGrid .order-card').length;
+                    const emptyEl = document.getElementById('courierEmptyState');
+                    if (emptyEl) emptyEl.style.display = (remaining === 0) ? '' : 'none';
+                }, 380);
+            }
+        } catch (err) {
+            if (card) card.classList.remove('card-updating');
+            showToast('Sunucu bağlantı hatası.', 'error');
+        }
+    }
+
+    function escapeHtml(str) {
+        return String(str ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function renderCourierCardHTML(order) {
+        const statusClass = order.status === 'PENDING' ? 'status-pending' : (order.status === 'PREPARING' ? 'status-preparing' : 'status-onway');
+        const statusText = order.status === 'PENDING' ? '🔔 Beklemede' : (order.status === 'PREPARING' ? '⏳ Hazırlanıyor' : '🛵 Kuryede');
+        const isCard = String(order.payment_method || '').includes('Kart');
+        const payClass = isCard ? 'payment-card' : 'payment-cash';
+        const payIcon = isCard ? '💳' : '💵';
+
+        const itemsHtml = (order.items || []).map(item => {
+            const thumb = item.image_url
+                ? `<img src="${escapeHtml(item.image_url)}" alt="${escapeHtml(item.name)}" class="order-item-thumb">`
+                : `<div class="order-item-thumb placeholder">ÜRÜN</div>`;
+            return `
+                <div class="order-item-row">
+                    <div class="order-item-left">
+                        ${thumb}
+                        <strong class="order-item-name">${escapeHtml(item.name)}</strong>
+                    </div>
+                    <div class="order-item-right">
+                        <span class="qty-badge">x${item.quantity}</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <article class="order-card ${statusClass}" id="courier-card-${order.order_id}" data-order-id="${order.order_id}">
+                <div class="order-card-header">
+                    <div>
+                        <div class="order-id-row">
+                            <span class="order-number-badge">#${order.order_id}</span>
+                            <span class="order-status-pill ${statusClass}">${statusText}</span>
+                        </div>
+                        <p class="order-timestamp">🕒 ${escapeHtml(order.created_at_formatted)} • <strong>👤 ${escapeHtml(order.user_name)}</strong></p>
+                    </div>
+                    <div class="order-total-box">
+                        <span class="order-total-label">Tahsil Edilecek</span>
+                        <strong class="order-total-amount">${Number(order.total_price).toFixed(2)} TL</strong>
+                        <span class="payment-badge ${payClass}">${payIcon} ${escapeHtml(order.payment_method)}</span>
+                    </div>
+                </div>
+
+                <div class="map-embed-wrap">
+                    <iframe class="map-embed-frame" loading="lazy" referrerpolicy="no-referrer-when-downgrade" src="${escapeHtml(order.google_maps_embed_url)}"></iframe>
+                    <div class="map-actions-bar">
+                        <div style="flex: 1; font-size: 13px; color: #173f35;">
+                            <strong>📍 Adres:</strong> ${escapeHtml(order.shipping_address)}
+                        </div>
+                        <a href="${escapeHtml(order.google_maps_url)}" target="_blank" rel="noopener" class="btn-google-maps">
+                            🗺️ Google Maps'te Aç
+                        </a>
+                    </div>
+                </div>
+
+                <div class="order-items-section">
+                    <div class="order-items-header">
+                        <span>📦 Teslim Edilecek Ürünler (${order.total_quantity} adet)</span>
+                        <span>Adet</span>
+                    </div>
+                    <div class="order-items-list">${itemsHtml}</div>
+                </div>
+
+                <div style="margin-top: 10px;">
+                    <button type="button" class="btn-deliver-only" onclick="markDeliveredByCourier(${order.order_id})">
+                        ✅ TESLİM EDİLDİ OLARAK İŞARETLE
+                    </button>
+                </div>
+            </article>
+        `;
+    }
+
+    async function fetchCourierOrders() {
+        try {
+            const response = await fetch('/api/courier/orders');
+            const data = await response.json();
+            if (!response.ok || !data.success) return;
+
+            const orders = data.orders || [];
+            let hasNewOrder = false;
+            const newSet = new Set();
+            orders.forEach(o => {
+                newSet.add(o.order_id);
+                if (!knownCourierOrderIds.has(o.order_id)) {
+                    hasNewOrder = true;
+                }
+            });
+
+            if (hasNewOrder || orders.length !== document.querySelectorAll('#courierOrdersGrid .order-card').length) {
+                const grid = document.getElementById('courierOrdersGrid');
+                if (grid) {
+                    grid.innerHTML = orders.map(o => renderCourierCardHTML(o)).join('');
+                }
+                const emptyEl = document.getElementById('courierEmptyState');
+                if (emptyEl) emptyEl.style.display = (orders.length === 0) ? '' : 'none';
+            }
+
+            if (hasNewOrder) {
+                playNewOrderChime();
+                showToast('🔔 Yeni sipariş geldi!', 'success');
+            }
+            knownCourierOrderIds = newSet;
+
+            const badge = document.getElementById('courierActiveCount');
+            if (badge) badge.textContent = orders.length;
+        } catch (_) {}
+    }
+
+    // Her 10 saniyede bir yeni sipariş kontrolü yap
+    setInterval(fetchCourierOrders, 10000);
+</script>
+</body>
+</html>
+

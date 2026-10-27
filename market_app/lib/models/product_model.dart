@@ -20,7 +20,10 @@ class Product {
   });
 
   factory Product.fromJson(Map<String, dynamic> json) {
-    final storedImageUrl = json['image_url']?.toString() ?? '';
+    final storedImageUrl = (json['image_url']?.toString() ?? '').replaceFirst(
+      'http://localhost:5000',
+      AppConstants.baseUrl,
+    );
     final imageField = json['image']?.toString() ?? '';
     final resolvedImageUrl = storedImageUrl.isNotEmpty
         ? storedImageUrl

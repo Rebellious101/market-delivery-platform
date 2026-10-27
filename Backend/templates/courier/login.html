@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kurye Girişi | Prestij Market Dağıtım</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="login-page">
+<main class="login-shell">
+    <section class="login-card">
+        <div class="login-mark" style="background: #1565c0;">🛵</div>
+        <p class="eyebrow" style="color: #1565c0;">PRESTİJ MARKET DAĞITIM</p>
+        <h1>Kurye Girişi</h1>
+        <p class="muted">Teslimat bekleyen siparişleri ve Google Maps konumlarını görüntülemek için kurye şifresini girin.</p>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash flash-{{ category }}" style="margin-top: 16px;">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form method="POST" action="{{ url_for('courier_login') }}" class="login-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label>
+                Kurye Şifresi
+                <input type="password" name="password" placeholder="••••••••" required autofocus>
+            </label>
+            <button type="submit" class="button button-primary" style="background: #1565c0;">Dağıtım Ekranını Aç</button>
+        </form>
+    </section>
+</main>
+</body>
+</html>
+

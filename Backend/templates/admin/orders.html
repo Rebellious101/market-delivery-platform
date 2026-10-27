@@ -3,87 +3,921 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Siparişler | Market Admin</title>
+    <title>Sipariş Yönetimi | Market Admin</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
 <header class="topbar">
     <div>
         <p class="eyebrow">MARKET ADMIN</p>
-        <h1>Sipariş Takibi</h1>
+        <h1>Sipariş Yönetimi</h1>
     </div>
     <nav class="nav-links">
         <a href="{{ url_for('admin_dashboard') }}">Dashboard</a>
         <a href="{{ url_for('admin_products') }}">Ürünler</a>
         <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
         <a href="{{ url_for('admin_campaigns') }}">Kampanyalar</a>
+        <a href="{{ url_for('admin_orders') }}" style="background: rgba(255,255,255,0.18); font-weight: 700;">Siparişler</a>
+        <a href="{{ url_for('courier_dashboard') }}" style="background: #1565c0; border-color: #1565c0; font-weight: 700;">🛵 Kurye Ekranı</a>
         <a href="{{ url_for('admin_logout') }}">Çıkış</a>
     </nav>
 </header>
+
 <main class="admin-shell">
+    <!-- Bildirim Toast Alanı -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="flash flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
     <section class="page-intro">
         <div>
-            <p class="eyebrow">OPERASYON</p>
-            <h2>Gelen siparişler</h2>
-            <p class="muted">Mobil uygulamadan gelen siparişleri ve ürün kalemlerini incele.</p>
+            <p class="eyebrow">OPERASYON MERKEZİ</p>
+            <h2>Sipariş Takip ve Geçmiş Paneli</h2>
+            <p class="muted">Bekleyen aktif siparişleri öncelik sırasına göre yönetin veya geçmiş sipariş kayıtlarını inceleyin.</p>
         </div>
-        <div class="stat-pill">{{ orders|length }} sipariş</div>
+        <div class="orders-intro-actions">
+            <div class="stat-pill" id="revenuePill">Toplam Ciro: {{ '%.2f'|format(stats.revenue) }} TL</div>
+            <button type="button" class="button button-secondary" onclick="refreshCurrentTab()" style="padding: 9px 14px; font-size: 13px;">↻ Yenile</button>
+        </div>
     </section>
-   
-   <!-- orders.html - Güncellenmiş Sipariş Kartı Bölümü -->
-<section class="orders-grid">
-    {% for order in orders.values() %}
-        <article class="order-card">
-            
-            <!-- 1. KART BAŞLIĞI VE DURUM SEÇİMİ -->
-            <div class="order-card-header">
-                <div>
-                    <p class="eyebrow">SİPARİŞ #{{ order.order_id }}</p>
-                    <h2>{{ order.created_at.strftime('%d.%m.%Y %H:%M') if order.created_at else 'Tarih yok' }}</h2>
-                </div>
-                
-                <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 6px;">
-                    <strong>{{ '%.2f'|format(order.total_price) }} TL</strong>
-                    
-                    <!-- SİPARİŞ DURUMUNU GÜNCELLEME FORMU -->
-                    <form method="POST" action="{{ url_for('admin_update_order_status', order_id=order.order_id) }}">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <select name="status" onchange="this.form.submit()" style="padding: 4px 8px; border-radius: 6px; border: 1px solid #cddbd2; font-size: 12px; font-weight: bold; background: #fff; cursor: pointer;">
-                            <option value="Hazırlanıyor" {% if order.status == 'Hazırlanıyor' %}selected{% endif %}>Hazırlanıyor</option>
-                            <option value="Yolda" {% if order.status == 'Yolda' %}selected{% endif %}>Yolda</option>
-                            <option value="Teslim Edildi" {% if order.status == 'Teslim Edildi' %}selected{% endif %}>Teslim Edildi</option>
-                            <option value="İptal Edildi" {% if order.status == 'İptal Edildi' %}selected{% endif %}>İptal Edildi</option>
-                        </select>
-                    </form>
-                </div>
-            </div>
 
-            <!-- 2. MÜŞTERİ, ADRES VE ÖDEME BİLGİSİ -->
-            <div class="order-customer-info">
-                <p><strong>Müşteri:</strong> {{ order.user_name or 'Belirtilmedi' }} ({{ order.user_email or 'E-posta yok' }})</p>
-                <p><strong>Adres:</strong> {{ order.shipping_address or 'Adres girilmedi' }}</p>
-                <p><strong>Ödeme Yöntemi:</strong> {{ order.payment_method or 'Nakit' }}</p>
-            </div>
+    <!-- ANA 2 SEKMELİ YAPI (AKTİF SİPARİŞLER / SİPARİŞ GEÇMİŞİ) -->
+    <div class="primary-order-tabs" role="tablist">
+        <button
+            type="button"
+            id="tabBtnActive"
+            class="primary-tab-btn active"
+            role="tab"
+            aria-selected="true"
+            onclick="switchMainTab('ACTIVE')"
+        >
+            <span class="primary-tab-title">🔥 Aktif Siparişler</span>
+            <span class="primary-tab-badge badge-urgent" id="activeBadgeCount">{{ stats.active }}</span>
+        </button>
 
-            <!-- 3. SİPARİŞ EDİLEN ÜRÜNLER -->
-            <div class="order-items">
-                {% for item in order['items'] %}
-                    <div class="order-item">
-                        <span>{{ item.name }} <small>x{{ item.quantity }}</small></span>
-                        <strong>{{ '%.2f'|format(item.price) }} TL</strong>
-                    </div>
-                {% endfor %}
-            </div>
+        <button
+            type="button"
+            id="tabBtnHistory"
+            class="primary-tab-btn"
+            role="tab"
+            aria-selected="false"
+            onclick="switchMainTab('HISTORY')"
+        >
+            <span class="primary-tab-title">🗂️ Sipariş Geçmişi</span>
+            <span class="primary-tab-badge" id="historyBadgeCount">{{ stats.history }}</span>
+        </button>
+    </div>
 
-        </article>
-    {% else %}
-        <div class="panel empty-state">
-            <span class="empty-icon">∅</span>
-            <h2>Henüz sipariş yok</h2>
-            <p class="muted">Mobil uygulamadan verilen siparişler burada görünecek.</p>
+    <!-- =========================================================
+         SEKME 1: AKTİF SİPARİŞLER (PENDING, PREPARING, ON_THE_WAY)
+         Eskiden yeniye sıralı (en uzun süredir bekleyen en üstte)
+         ========================================================= -->
+    <section id="activeOrdersTabPanel" class="tab-panel active">
+        <div class="active-subsummary">
+            <div class="subsummary-pills">
+                <span class="sub-pill pill-pending">🔔 Beklemede: <strong id="countPending">{{ stats.pending }}</strong></span>
+                <span class="sub-pill pill-preparing">⏳ Hazırlanıyor: <strong id="countPreparing">{{ stats.preparing }}</strong></span>
+                <span class="sub-pill pill-onway">🛵 Kuryede: <strong id="countOnWay">{{ stats.on_way }}</strong></span>
+            </div>
+            <span class="sort-hint">⚡ Sıralama: En uzun süredir bekleyen sipariş en üstte</span>
         </div>
-    {% endfor %}
-</section>
+
+        <div id="activeOrdersGrid" class="orders-grid">
+            {% for order in active_orders %}
+                {% set status_class = 'status-pending' if order.status == 'PENDING' else ('status-preparing' if order.status == 'PREPARING' else 'status-onway') %}
+                <article
+                    class="order-card {{ status_class }}"
+                    id="order-card-{{ order.order_id }}"
+                    data-order-id="{{ order.order_id }}"
+                    data-status="{{ order.status }}"
+                >
+                    <!-- 1. KART ÜST BİLGİ -->
+                    <div class="order-card-header">
+                        <div>
+                            <div class="order-id-row">
+                                <span class="order-number-badge">#{{ order.order_id }}</span>
+                                <span class="order-status-pill {{ status_class }}" id="status-pill-{{ order.order_id }}">
+                                    {% if order.status == 'PENDING' %}🔔 Beklemede
+                                    {% elif order.status == 'PREPARING' %}⏳ Hazırlanıyor
+                                    {% elif order.status == 'ON_THE_WAY' %}🛵 Kuryede
+                                    {% endif %}
+                                </span>
+                            </div>
+                            <p class="order-timestamp">
+                                🕒 {{ order.created_at_formatted }}
+                            </p>
+                        </div>
+
+                        <div class="order-total-box">
+                            <span class="order-total-label">Toplam Tutar</span>
+                            <strong class="order-total-amount">{{ '%.2f'|format(order.total_price) }} TL</strong>
+                            <span class="payment-badge {% if 'Kart' in order.payment_method %}payment-card{% else %}payment-cash{% endif %}">
+                                {% if 'Kart' in order.payment_method %}💳 {{ order.payment_method }}{% else %}💵 {{ order.payment_method }}{% endif %}
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- 2. GÖRSEL SİPARİŞ AŞAMA ÇUBUĞU -->
+                    <div class="order-stepper" id="stepper-{{ order.order_id }}">
+                        <div class="step {% if order.status in ['PENDING', 'PREPARING', 'ON_THE_WAY'] %}active{% endif %}">
+                            <span class="step-dot">1</span>
+                            <span class="step-text">Beklemede</span>
+                        </div>
+                        <div class="step-line {% if order.status in ['PREPARING', 'ON_THE_WAY'] %}active{% endif %}"></div>
+                        <div class="step {% if order.status in ['PREPARING', 'ON_THE_WAY'] %}active{% endif %}">
+                            <span class="step-dot">2</span>
+                            <span class="step-text">Hazırlanıyor</span>
+                        </div>
+                        <div class="step-line {% if order.status == 'ON_THE_WAY' %}active{% endif %}"></div>
+                        <div class="step {% if order.status == 'ON_THE_WAY' %}active{% endif %}">
+                            <span class="step-dot">3</span>
+                            <span class="step-text">Kuryede</span>
+                        </div>
+                    </div>
+
+                    <!-- 3. MÜŞTERİ VE TESLİMAT ADRESİ -->
+                    <div class="order-customer-box">
+                        <div class="customer-row">
+                            <span class="info-icon">👤</span>
+                            <div>
+                                <strong>{{ order.user_name }}</strong>
+                                <small class="customer-email">{{ order.user_email }}</small>
+                            </div>
+                        </div>
+                        <div class="customer-row address-row">
+                            <span class="info-icon">📍</span>
+                            <div class="address-text-wrap">
+                                <span>{{ order.shipping_address }}</span>
+                            </div>
+                            <a
+                                href="{{ order.google_maps_url }}"
+                                target="_blank"
+                                rel="noopener"
+                                class="copy-address-btn"
+                                style="text-decoration: none; background: #e8f0fe; color: #1967d2; border-color: #bdd3f7;"
+                            >
+                                🗺️ Harita
+                            </a>
+                            <button
+                                type="button"
+                                class="copy-address-btn"
+                                data-address="{{ order.shipping_address }}"
+                                onclick="copyOrderAddress(this)"
+                            >
+                                📋 Kopyala
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 4. SİPARİŞ EDİLEN ÜRÜNLER -->
+                    <div class="order-items-section">
+                        <div class="order-items-header">
+                            <span>Sipariş İçeriği ({{ order['items']|length }} çeşit, {{ order.total_quantity }} adet)</span>
+                            <span>Tutar</span>
+                        </div>
+                        <div class="order-items-list">
+                            {% for item in order['items'] %}
+                                <div class="order-item-row">
+                                    <div class="order-item-left">
+                                        {% if item.image %}
+                                            <img src="{{ url_for('static', filename='uploads/' ~ item.image) }}" alt="{{ item.name }}" class="order-item-thumb">
+                                        {% else %}
+                                            <div class="order-item-thumb placeholder">ÜRÜN</div>
+                                        {% endif %}
+                                        <div>
+                                            <strong class="order-item-name">{{ item.name }}</strong>
+                                            <small class="order-item-unit">{{ '%.2f'|format(item.price) }} TL / adet</small>
+                                        </div>
+                                    </div>
+                                    <div class="order-item-right">
+                                        <span class="qty-badge">x{{ item.quantity }}</span>
+                                        <strong class="line-total">{{ '%.2f'|format(item.line_total) }} TL</strong>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <!-- 5. HIZLI AKSİYON BUTONLARI VE DURUM SEÇİCİ -->
+                    <div class="order-actions-bar">
+                        <div class="quick-status-buttons" id="quick-actions-{{ order.order_id }}">
+                            {% if order.status == 'PENDING' %}
+                                <button type="button" class="btn-quick btn-quick-preparing" onclick="updateOrderStatus({{ order.order_id }}, 'PREPARING')">
+                                    ⏳ Hazırlamaya Başla
+                                </button>
+                            {% elif order.status == 'PREPARING' %}
+                                <button type="button" class="btn-quick btn-quick-onway" onclick="updateOrderStatus({{ order.order_id }}, 'ON_THE_WAY')">
+                                    🛵 Kuryeye Ver
+                                </button>
+                            {% elif order.status == 'ON_THE_WAY' %}
+                                <button type="button" class="btn-quick btn-quick-delivered" onclick="updateOrderStatus({{ order.order_id }}, 'DELIVERED')">
+                                    ✅ Teslim Edildi
+                                </button>
+                            {% endif %}
+
+                            {% if order.status != 'ON_THE_WAY' %}
+                                <button type="button" class="btn-quick btn-quick-delivered" onclick="updateOrderStatus({{ order.order_id }}, 'DELIVERED')">
+                                    ✅ Teslim Edildi
+                                </button>
+                            {% endif %}
+
+                            <button type="button" class="btn-quick btn-quick-cancel" onclick="confirmCancelOrder({{ order.order_id }})">
+                                ✕ İptal Et
+                            </button>
+                        </div>
+
+                        <div class="manual-status-form">
+                            <select
+                                id="status-select-{{ order.order_id }}"
+                                class="status-select"
+                                onchange="updateOrderStatus({{ order.order_id }}, this.value)"
+                            >
+                                <option value="PENDING" {% if order.status == 'PENDING' %}selected{% endif %}>🔔 Beklemede</option>
+                                <option value="PREPARING" {% if order.status == 'PREPARING' %}selected{% endif %}>⏳ Hazırlanıyor</option>
+                                <option value="ON_THE_WAY" {% if order.status == 'ON_THE_WAY' %}selected{% endif %}>🛵 Kuryede</option>
+                                <option value="DELIVERED">✅ Teslim Edildi</option>
+                                <option value="CANCELLED">✕ İptal Edildi</option>
+                            </select>
+                        </div>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+
+        <div id="activeEmptyState" class="panel empty-state" {% if active_orders|length > 0 %}style="display: none;"{% endif %}>
+            <span class="empty-icon">🎉</span>
+            <h2>Bekleyen aktif sipariş yok</h2>
+            <p class="muted">Şu anda hazırlanmayı veya teslimatı bekleyen aktif sipariş bulunmuyor. Tamamlanan siparişleri "Sipariş Geçmişi" sekmesinden inceleyebilirsiniz.</p>
+        </div>
+    </section>
+
+    <!-- =========================================================
+         SEKME 2: SİPARİŞ GEÇMİŞİ (DELIVERED, CANCELLED)
+         Yeniden eskiye sıralı + Filtreleme + Arama + Sayfalama
+         ========================================================= -->
+    <section id="historyOrdersTabPanel" class="tab-panel" style="display: none;">
+        <!-- FİLTRE VE ARAMA ARAÇ ÇUBUĞU -->
+        <div class="history-filter-bar panel">
+            <div class="history-status-pills">
+                <button type="button" class="hist-filter-btn active" data-hist-status="ALL" onclick="setHistoryStatusFilter('ALL', this)">
+                    Hepsi
+                </button>
+                <button type="button" class="hist-filter-btn" data-hist-status="DELIVERED" onclick="setHistoryStatusFilter('DELIVERED', this)">
+                    ✅ Sadece Teslim Edilenler
+                </button>
+                <button type="button" class="hist-filter-btn" data-hist-status="CANCELLED" onclick="setHistoryStatusFilter('CANCELLED', this)">
+                    ✕ Sadece İptal Edilenler
+                </button>
+            </div>
+
+            <div class="history-search-grid">
+                <div class="filter-field search-field-wide">
+                    <label for="historySearchInput">Sipariş No / Müşteri / Ürün Ara</label>
+                    <input
+                        type="search"
+                        id="historySearchInput"
+                        placeholder="Örn: #9, Ahmet, Gazimağusa, Süt..."
+                        oninput="debounceHistoryFetch()"
+                    >
+                </div>
+
+                <div class="filter-field">
+                    <label for="historyStartDate">Başlangıç Tarihi</label>
+                    <input type="date" id="historyStartDate" onchange="fetchHistoryOrders(1)">
+                </div>
+
+                <div class="filter-field">
+                    <label for="historyEndDate">Bitiş Tarihi</label>
+                    <input type="date" id="historyEndDate" onchange="fetchHistoryOrders(1)">
+                </div>
+
+                <div class="filter-field">
+                    <label for="historyLimitSelect">Sayfa Başına</label>
+                    <select id="historyLimitSelect" onchange="fetchHistoryOrders(1)">
+                        <option value="6">6 Sipariş</option>
+                        <option value="10" selected>10 Sipariş</option>
+                        <option value="20">20 Sipariş</option>
+                        <option value="50">50 Sipariş</option>
+                    </select>
+                </div>
+
+                <div class="filter-field filter-reset-col">
+                    <button type="button" class="button button-secondary" onclick="resetHistoryFilters()" style="padding: 10px 14px; font-size: 13px;">
+                        Filtreleri Temizle
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="historyLoadingState" class="panel empty-state" style="display: none;">
+            <p class="muted">Sipariş geçmişi yükleniyor...</p>
+        </div>
+
+        <div id="historyOrdersGrid" class="orders-grid"></div>
+
+        <div id="historyEmptyState" class="panel empty-state" style="display: none;">
+            <span class="empty-icon">🗂️</span>
+            <h2>Kayıtlı geçmiş sipariş bulunamadı</h2>
+            <p class="muted">Seçtiğiniz filtre veya arama kriterlerine uygun tamamlanmış/iptal edilmiş sipariş yok.</p>
+        </div>
+
+        <!-- SAYFALAMA (PAGINATION) BİLEŞENİ -->
+        <div id="historyPaginationBar" class="pagination-bar panel" style="display: none;">
+            <div class="pagination-info" id="historyPaginationInfo">
+                Toplam 0 kayıt
+            </div>
+            <div class="pagination-controls" id="historyPaginationControls"></div>
+        </div>
+    </section>
 </main>
+
+<script>
+    const CSRF_TOKEN = "{{ csrf_token() }}";
+    let currentMainTab = 'ACTIVE';
+    let historyStatusFilter = 'ALL';
+    let historyCurrentPage = 1;
+    let historySearchTimer = null;
+
+    function showToast(message, type = 'success') {
+        const container = document.getElementById('toastContainer');
+        if (!container) return;
+        const toast = document.createElement('div');
+        toast.className = `toast-item toast-${type}`;
+        toast.textContent = message;
+        container.appendChild(toast);
+        setTimeout(() => {
+            toast.classList.add('toast-hide');
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    }
+
+    function switchMainTab(tabName) {
+        currentMainTab = tabName;
+        const btnActive = document.getElementById('tabBtnActive');
+        const btnHistory = document.getElementById('tabBtnHistory');
+        const panelActive = document.getElementById('activeOrdersTabPanel');
+        const panelHistory = document.getElementById('historyOrdersTabPanel');
+
+        if (tabName === 'ACTIVE') {
+            btnActive.classList.add('active');
+            btnActive.setAttribute('aria-selected', 'true');
+            btnHistory.classList.remove('active');
+            btnHistory.setAttribute('aria-selected', 'false');
+            panelActive.style.display = '';
+            panelHistory.style.display = 'none';
+            fetchActiveOrders();
+        } else {
+            btnHistory.classList.add('active');
+            btnHistory.setAttribute('aria-selected', 'true');
+            btnActive.classList.remove('active');
+            btnActive.setAttribute('aria-selected', 'false');
+            panelActive.style.display = 'none';
+            panelHistory.style.display = '';
+            fetchHistoryOrders(1);
+        }
+    }
+
+    function refreshCurrentTab() {
+        if (currentMainTab === 'ACTIVE') {
+            fetchActiveOrders();
+        } else {
+            fetchHistoryOrders(historyCurrentPage);
+        }
+    }
+
+    function updateDashboardCounters(stats) {
+        if (!stats) return;
+        const activeBadge = document.getElementById('activeBadgeCount');
+        const historyBadge = document.getElementById('historyBadgeCount');
+        const countPending = document.getElementById('countPending');
+        const countPreparing = document.getElementById('countPreparing');
+        const countOnWay = document.getElementById('countOnWay');
+        const revenuePill = document.getElementById('revenuePill');
+
+        if (activeBadge !== null && stats.active !== undefined) activeBadge.textContent = stats.active;
+        if (historyBadge !== null && stats.history !== undefined) historyBadge.textContent = stats.history;
+        if (countPending !== null && stats.pending !== undefined) countPending.textContent = stats.pending;
+        if (countPreparing !== null && stats.preparing !== undefined) countPreparing.textContent = stats.preparing;
+        if (countOnWay !== null && stats.on_way !== undefined) countOnWay.textContent = stats.on_way;
+        if (revenuePill !== null && stats.revenue !== undefined) {
+            revenuePill.textContent = `Toplam Ciro: ${Number(stats.revenue).toFixed(2)} TL`;
+        }
+    }
+
+    function confirmCancelOrder(orderId) {
+        if (confirm(`Sipariş #${orderId} iptal edilsin mi? (Ürün stokları otomatik olarak iade edilir)`)) {
+            updateOrderStatus(orderId, 'CANCELLED');
+        }
+    }
+
+    async function updateOrderStatus(orderId, newStatus) {
+        const card = document.getElementById(`order-card-${orderId}`);
+        if (card) {
+            card.classList.add('card-updating');
+        }
+
+        try {
+            const response = await fetch(`/api/admin/orders/${orderId}/status`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': CSRF_TOKEN
+                },
+                body: JSON.stringify({ status: newStatus })
+            });
+
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                if (card) card.classList.remove('card-updating');
+                showToast(data.error || 'Sipariş durumu güncellenemedi.', 'error');
+                return;
+            }
+
+            updateDashboardCounters(data.stats);
+            showToast(data.message, 'success');
+
+            // Eğer sipariş DELIVERED veya CANCELLED olduysa ana ekrandan yumuşak animasyonla kaldır!
+            if (!data.is_active && currentMainTab === 'ACTIVE') {
+                if (card) {
+                    card.classList.remove('card-updating');
+                    card.classList.add('card-removing');
+                    setTimeout(() => {
+                        card.remove();
+                        checkActiveEmptyState();
+                    }, 380);
+                }
+            } else if (currentMainTab === 'ACTIVE') {
+                // Aktif bir aşamadan diğer aktif aşamaya geçtiyse kartı yerinde güncelle
+                if (card) {
+                    card.classList.remove('card-updating');
+                    updateActiveCardDOM(orderId, data.status);
+                }
+            } else {
+                // Sipariş geçmişi sekmesindeysek listeyi yenile
+                fetchHistoryOrders(historyCurrentPage);
+            }
+        } catch (err) {
+            if (card) card.classList.remove('card-updating');
+            showToast('Sunucu ile bağlantı kurulamadı.', 'error');
+        }
+    }
+
+    function checkActiveEmptyState() {
+        const grid = document.getElementById('activeOrdersGrid');
+        const emptyState = document.getElementById('activeEmptyState');
+        if (!grid || !emptyState) return;
+        const remainingCards = grid.querySelectorAll('.order-card').length;
+        emptyState.style.display = (remainingCards === 0) ? '' : 'none';
+    }
+
+    function getStatusClass(statusCode) {
+        if (statusCode === 'PENDING') return 'status-pending';
+        if (statusCode === 'PREPARING') return 'status-preparing';
+        if (statusCode === 'ON_THE_WAY') return 'status-onway';
+        if (statusCode === 'DELIVERED') return 'status-delivered';
+        return 'status-cancelled';
+    }
+
+    function getStatusBadgeText(statusCode) {
+        if (statusCode === 'PENDING') return '🔔 Beklemede';
+        if (statusCode === 'PREPARING') return '⏳ Hazırlanıyor';
+        if (statusCode === 'ON_THE_WAY') return '🛵 Kuryede';
+        if (statusCode === 'DELIVERED') return '✅ Teslim Edildi';
+        return '✕ İptal Edildi';
+    }
+
+    function updateActiveCardDOM(orderId, statusCode) {
+        const card = document.getElementById(`order-card-${orderId}`);
+        if (!card) return;
+
+        card.setAttribute('data-status', statusCode);
+        card.className = `order-card ${getStatusClass(statusCode)}`;
+
+        const pill = document.getElementById(`status-pill-${orderId}`);
+        if (pill) {
+            pill.className = `order-status-pill ${getStatusClass(statusCode)}`;
+            pill.textContent = getStatusBadgeText(statusCode);
+        }
+
+        const stepper = document.getElementById(`stepper-${orderId}`);
+        if (stepper) {
+            stepper.outerHTML = renderStepperHTML(orderId, statusCode);
+        }
+
+        const quickActions = document.getElementById(`quick-actions-${orderId}`);
+        if (quickActions) {
+            quickActions.innerHTML = renderQuickButtonsHTML(orderId, statusCode);
+        }
+
+        const selectEl = document.getElementById(`status-select-${orderId}`);
+        if (selectEl) {
+            selectEl.value = statusCode;
+        }
+    }
+
+    function renderStepperHTML(orderId, statusCode) {
+        if (statusCode === 'DELIVERED' || statusCode === 'CANCELLED') return '';
+        const step1 = ['PENDING', 'PREPARING', 'ON_THE_WAY'].includes(statusCode) ? 'active' : '';
+        const step2 = ['PREPARING', 'ON_THE_WAY'].includes(statusCode) ? 'active' : '';
+        const step3 = (statusCode === 'ON_THE_WAY') ? 'active' : '';
+        return `
+            <div class="order-stepper" id="stepper-${orderId}">
+                <div class="step ${step1}">
+                    <span class="step-dot">1</span>
+                    <span class="step-text">Beklemede</span>
+                </div>
+                <div class="step-line ${step2}"></div>
+                <div class="step ${step2}">
+                    <span class="step-dot">2</span>
+                    <span class="step-text">Hazırlanıyor</span>
+                </div>
+                <div class="step-line ${step3}"></div>
+                <div class="step ${step3}">
+                    <span class="step-dot">3</span>
+                    <span class="step-text">Kuryede</span>
+                </div>
+            </div>
+        `;
+    }
+
+    function renderQuickButtonsHTML(orderId, statusCode) {
+        let html = '';
+        if (statusCode === 'PENDING') {
+            html += `<button type="button" class="btn-quick btn-quick-preparing" onclick="updateOrderStatus(${orderId}, 'PREPARING')">⏳ Hazırlamaya Başla</button>`;
+        } else if (statusCode === 'PREPARING') {
+            html += `<button type="button" class="btn-quick btn-quick-onway" onclick="updateOrderStatus(${orderId}, 'ON_THE_WAY')">🛵 Kuryeye Ver</button>`;
+        } else if (statusCode === 'ON_THE_WAY') {
+            html += `<button type="button" class="btn-quick btn-quick-delivered" onclick="updateOrderStatus(${orderId}, 'DELIVERED')">✅ Teslim Edildi</button>`;
+        }
+        if (statusCode !== 'ON_THE_WAY' && statusCode !== 'DELIVERED' && statusCode !== 'CANCELLED') {
+            html += `<button type="button" class="btn-quick btn-quick-delivered" onclick="updateOrderStatus(${orderId}, 'DELIVERED')">✅ Teslim Edildi</button>`;
+        }
+        if (statusCode !== 'DELIVERED' && statusCode !== 'CANCELLED') {
+            html += `<button type="button" class="btn-quick btn-quick-cancel" onclick="confirmCancelOrder(${orderId})">✕ İptal Et</button>`;
+        }
+        return html;
+    }
+
+    function escapeHtml(str) {
+        return String(str ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function renderOrderCardHTML(order, isHistoryTab = false) {
+        const statusClass = getStatusClass(order.status);
+        const isCardPayment = String(order.payment_method || '').includes('Kart');
+        const paymentBadgeClass = isCardPayment ? 'payment-card' : 'payment-cash';
+        const paymentIcon = isCardPayment ? '💳' : '💵';
+
+        const itemsHtml = (order.items || []).map(item => {
+            const thumbHtml = item.image_url
+                ? `<img src="${escapeHtml(item.image_url)}" alt="${escapeHtml(item.name)}" class="order-item-thumb">`
+                : `<div class="order-item-thumb placeholder">ÜRÜN</div>`;
+            return `
+                <div class="order-item-row">
+                    <div class="order-item-left">
+                        ${thumbHtml}
+                        <div>
+                            <strong class="order-item-name">${escapeHtml(item.name)}</strong>
+                            <small class="order-item-unit">${Number(item.price).toFixed(2)} TL / adet</small>
+                        </div>
+                    </div>
+                    <div class="order-item-right">
+                        <span class="qty-badge">x${item.quantity}</span>
+                        <strong class="line-total">${Number(item.line_total).toFixed(2)} TL</strong>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        const actionsHtml = isHistoryTab ? `
+            <div class="order-actions-bar">
+                <span class="muted" style="margin:0; font-size: 12px;">
+                    Durum: <strong>${escapeHtml(order.status_label)}</strong>
+                </span>
+                <div class="manual-status-form">
+                    <select
+                        id="status-select-${order.order_id}"
+                        class="status-select"
+                        onchange="updateOrderStatus(${order.order_id}, this.value)"
+                    >
+                        <option value="PENDING" ${order.status === 'PENDING' ? 'selected' : ''}>🔔 Beklemede</option>
+                        <option value="PREPARING" ${order.status === 'PREPARING' ? 'selected' : ''}>⏳ Hazırlanıyor</option>
+                        <option value="ON_THE_WAY" ${order.status === 'ON_THE_WAY' ? 'selected' : ''}>🛵 Kuryede</option>
+                        <option value="DELIVERED" ${order.status === 'DELIVERED' ? 'selected' : ''}>✅ Teslim Edildi</option>
+                        <option value="CANCELLED" ${order.status === 'CANCELLED' ? 'selected' : ''}>✕ İptal Edildi</option>
+                    </select>
+                </div>
+            </div>
+        ` : `
+            <div class="order-actions-bar">
+                <div class="quick-status-buttons" id="quick-actions-${order.order_id}">
+                    ${renderQuickButtonsHTML(order.order_id, order.status)}
+                </div>
+                <div class="manual-status-form">
+                    <select
+                        id="status-select-${order.order_id}"
+                        class="status-select"
+                        onchange="updateOrderStatus(${order.order_id}, this.value)"
+                    >
+                        <option value="PENDING" ${order.status === 'PENDING' ? 'selected' : ''}>🔔 Beklemede</option>
+                        <option value="PREPARING" ${order.status === 'PREPARING' ? 'selected' : ''}>⏳ Hazırlanıyor</option>
+                        <option value="ON_THE_WAY" ${order.status === 'ON_THE_WAY' ? 'selected' : ''}>🛵 Kuryede</option>
+                        <option value="DELIVERED">✅ Teslim Edildi</option>
+                        <option value="CANCELLED">✕ İptal Edildi</option>
+                    </select>
+                </div>
+            </div>
+        `;
+
+        return `
+            <article class="order-card ${statusClass}" id="order-card-${order.order_id}" data-order-id="${order.order_id}" data-status="${order.status}">
+                <div class="order-card-header">
+                    <div>
+                        <div class="order-id-row">
+                            <span class="order-number-badge">#${order.order_id}</span>
+                            <span class="order-status-pill ${statusClass}" id="status-pill-${order.order_id}">
+                                ${getStatusBadgeText(order.status)}
+                            </span>
+                        </div>
+                        <p class="order-timestamp">🕒 ${escapeHtml(order.created_at_formatted)}</p>
+                    </div>
+                    <div class="order-total-box">
+                        <span class="order-total-label">Toplam Tutar</span>
+                        <strong class="order-total-amount">${Number(order.total_price).toFixed(2)} TL</strong>
+                        <span class="payment-badge ${paymentBadgeClass}">
+                            ${paymentIcon} ${escapeHtml(order.payment_method)}
+                        </span>
+                    </div>
+                </div>
+
+                ${!isHistoryTab ? renderStepperHTML(order.order_id, order.status) : ''}
+
+                <div class="order-customer-box">
+                    <div class="customer-row">
+                        <span class="info-icon">👤</span>
+                        <div>
+                            <strong>${escapeHtml(order.user_name)}</strong>
+                            <small class="customer-email">${escapeHtml(order.user_email)}</small>
+                        </div>
+                    </div>
+                    <div class="customer-row address-row">
+                        <span class="info-icon">📍</span>
+                        <div class="address-text-wrap">
+                            <span>${escapeHtml(order.shipping_address)}</span>
+                        </div>
+                        <a
+                            href="${escapeHtml(order.google_maps_url || '#')}"
+                            target="_blank"
+                            rel="noopener"
+                            class="copy-address-btn"
+                            style="text-decoration: none; background: #e8f0fe; color: #1967d2; border-color: #bdd3f7;"
+                        >
+                            🗺️ Harita
+                        </a>
+                        <button
+                            type="button"
+                            class="copy-address-btn"
+                            data-address="${escapeHtml(order.shipping_address)}"
+                            onclick="copyOrderAddress(this)"
+                        >
+                            📋 Kopyala
+                        </button>
+                    </div>
+                </div>
+
+                <div class="order-items-section">
+                    <div class="order-items-header">
+                        <span>Sipariş İçeriği (${(order.items || []).length} çeşit, ${order.total_quantity} adet)</span>
+                        <span>Tutar</span>
+                    </div>
+                    <div class="order-items-list">
+                        ${itemsHtml}
+                    </div>
+                </div>
+
+                ${actionsHtml}
+            </article>
+        `;
+    }
+
+    let knownAdminOrderIds = new Set([{% for o in active_orders %}{{ o.order_id }},{% endfor %}]);
+
+    function playNewOrderChime() {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const playTone = (freq, start, duration) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+                gain.gain.setValueAtTime(0.22, ctx.currentTime + start);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(ctx.currentTime + start);
+                osc.stop(ctx.currentTime + start + duration);
+            };
+            playTone(659.25, 0, 0.22);
+            playTone(880.0, 0.24, 0.35);
+        } catch (_) {}
+    }
+
+    async function fetchActiveOrders() {
+        try {
+            const response = await fetch('/api/admin/orders/active');
+            const data = await response.json();
+            if (!response.ok || !data.success) return;
+
+            updateDashboardCounters(data.stats);
+            const orders = data.orders || [];
+            let hasNewOrder = false;
+            const nextIds = new Set();
+            orders.forEach(o => {
+                nextIds.add(o.order_id);
+                if (!knownAdminOrderIds.has(o.order_id)) {
+                    hasNewOrder = true;
+                }
+            });
+            knownAdminOrderIds = nextIds;
+
+            const grid = document.getElementById('activeOrdersGrid');
+            if (grid) {
+                grid.innerHTML = orders.map(o => renderOrderCardHTML(o, false)).join('');
+            }
+            checkActiveEmptyState();
+
+            if (hasNewOrder) {
+                playNewOrderChime();
+                showToast('🔔 Yeni sipariş geldi!', 'success');
+            }
+        } catch (err) {
+            console.error('Aktif siparişler alınamadı:', err);
+        }
+    }
+
+    setInterval(() => {
+        if (currentMainTab === 'ACTIVE') {
+            fetchActiveOrders();
+        }
+    }, 10000);
+
+    function setHistoryStatusFilter(status, btnEl) {
+        historyStatusFilter = status;
+        document.querySelectorAll('.history-status-pills .hist-filter-btn').forEach(b => b.classList.remove('active'));
+        if (btnEl) btnEl.classList.add('active');
+        fetchHistoryOrders(1);
+    }
+
+    function debounceHistoryFetch() {
+        if (historySearchTimer) clearTimeout(historySearchTimer);
+        historySearchTimer = setTimeout(() => {
+            fetchHistoryOrders(1);
+        }, 280);
+    }
+
+    function resetHistoryFilters() {
+        historyStatusFilter = 'ALL';
+        document.querySelectorAll('.history-status-pills .hist-filter-btn').forEach(b => {
+            b.classList.toggle('active', b.getAttribute('data-hist-status') === 'ALL');
+        });
+        const searchInput = document.getElementById('historySearchInput');
+        const startDate = document.getElementById('historyStartDate');
+        const endDate = document.getElementById('historyEndDate');
+        if (searchInput) searchInput.value = '';
+        if (startDate) startDate.value = '';
+        if (endDate) endDate.value = '';
+        fetchHistoryOrders(1);
+    }
+
+    async function fetchHistoryOrders(page = 1) {
+        historyCurrentPage = page;
+        const search = (document.getElementById('historySearchInput')?.value || '').trim();
+        const startDate = document.getElementById('historyStartDate')?.value || '';
+        const endDate = document.getElementById('historyEndDate')?.value || '';
+        const limit = document.getElementById('historyLimitSelect')?.value || '10';
+
+        const params = new URLSearchParams({
+            status: historyStatusFilter,
+            page: String(page),
+            limit: String(limit)
+        });
+        if (search) params.set('search', search);
+        if (startDate) params.set('start_date', startDate);
+        if (endDate) params.set('end_date', endDate);
+
+        const loadingEl = document.getElementById('historyLoadingState');
+        const gridEl = document.getElementById('historyOrdersGrid');
+        const emptyEl = document.getElementById('historyEmptyState');
+        const paginationBar = document.getElementById('historyPaginationBar');
+
+        if (loadingEl) loadingEl.style.display = 'block';
+        if (gridEl) gridEl.style.opacity = '0.5';
+
+        try {
+            const response = await fetch(`/api/admin/orders/history?${params.toString()}`);
+            const data = await response.json();
+            if (loadingEl) loadingEl.style.display = 'none';
+            if (gridEl) gridEl.style.opacity = '1';
+
+            if (!response.ok || !data.success) {
+                showToast(data.error || 'Sipariş geçmişi yüklenemedi.', 'error');
+                return;
+            }
+
+            updateDashboardCounters(data.stats);
+            const orders = data.orders || [];
+            if (gridEl) {
+                gridEl.innerHTML = orders.map(o => renderOrderCardHTML(o, true)).join('');
+            }
+            if (emptyEl) {
+                emptyEl.style.display = (orders.length === 0) ? 'block' : 'none';
+            }
+            renderHistoryPagination(data.pagination);
+        } catch (err) {
+            if (loadingEl) loadingEl.style.display = 'none';
+            if (gridEl) gridEl.style.opacity = '1';
+            showToast('Sipariş geçmişi alınırken bağlantı hatası oluştu.', 'error');
+        }
+    }
+
+    function renderHistoryPagination(pagination) {
+        const bar = document.getElementById('historyPaginationBar');
+        const info = document.getElementById('historyPaginationInfo');
+        const controls = document.getElementById('historyPaginationControls');
+        if (!bar || !info || !controls || !pagination) return;
+
+        if (pagination.total_items === 0) {
+            bar.style.display = 'none';
+            return;
+        }
+
+        bar.style.display = 'flex';
+        info.textContent = `Toplam ${pagination.total_items} sipariş • Sayfa ${pagination.page} / ${pagination.total_pages}`;
+
+        let buttonsHtml = '';
+        buttonsHtml += `
+            <button
+                type="button"
+                class="page-btn"
+                ${!pagination.has_prev ? 'disabled' : ''}
+                onclick="fetchHistoryOrders(${pagination.page - 1})"
+            >
+                ← Önceki
+            </button>
+        `;
+
+        const startPage = Math.max(1, pagination.page - 2);
+        const endPage = Math.min(pagination.total_pages, pagination.page + 2);
+        for (let p = startPage; p <= endPage; p++) {
+            buttonsHtml += `
+                <button
+                    type="button"
+                    class="page-btn ${p === pagination.page ? 'active' : ''}"
+                    onclick="fetchHistoryOrders(${p})"
+                >
+                    ${p}
+                </button>
+            `;
+        }
+
+        buttonsHtml += `
+            <button
+                type="button"
+                class="page-btn"
+                ${!pagination.has_next ? 'disabled' : ''}
+                onclick="fetchHistoryOrders(${pagination.page + 1})"
+            >
+                Sonraki →
+            </button>
+        `;
+
+        controls.innerHTML = buttonsHtml;
+    }
+
+    function copyOrderAddress(btn) {
+        const address = btn.getAttribute('data-address') || '';
+        if (!address) return;
+        navigator.clipboard.writeText(address).then(() => {
+            const originalText = btn.textContent;
+            btn.textContent = '✓ Kopyalandı';
+            btn.classList.add('copied');
+            setTimeout(() => {
+                btn.textContent = originalText;
+                btn.classList.remove('copied');
+            }, 1800);
+        });
+    }
+</script>
 </body>
 </html>

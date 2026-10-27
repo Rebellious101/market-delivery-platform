@@ -37,6 +37,8 @@ class OrderModel {
     'address_id': address.id,
     'shipping_address': address.fullAddress,
     'full_address': address.fullAddress,
+    'latitude': address.latitude,
+    'longitude': address.longitude,
     'items': items.map((item) => item.toJson()).toList(),
     'total_price': totalPrice,
     'payment_method': paymentMethod,
