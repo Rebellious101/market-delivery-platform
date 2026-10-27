@@ -36,7 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   http: ^1.6.0
 
-  google_maps_flutter: ^2.5.3
+  flutter_map: ^7.0.2            # <-- OSM harita bileşeni
+  latlong2: ^0.9.1               # <-- Enlem/Boylam (LatLng) sınıfı
   geocoding: ^5.0.0
   geolocator: ^14.0.3
 

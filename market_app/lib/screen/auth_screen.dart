@@ -9,6 +9,7 @@ import '../core/constants.dart';
 import '../core/localization.dart';
 import '../core/session_manager.dart';
 import '../main.dart';
+import 'address_book.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key, this.onContinueAsGuest});
@@ -102,6 +103,7 @@ class _AuthScreenState extends State<AuthScreen> {
           throw Exception('Sunucu oturum anahtarı döndürmedi.');
         }
         SessionManager.instance.setSession(token: token, user: user);
+        unawaited(AddressBook.instance.fetchUserAddresses());
         if (!mounted) return;
         if (Navigator.of(context).canPop()) Navigator.of(context).pop();
         return;

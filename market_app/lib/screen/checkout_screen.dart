@@ -1,9 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+
 import '../core/constants.dart';
+import '../core/session_manager.dart';
 import '../models/address_model.dart';
 import '../models/order_model.dart';
+import 'cart_manager.dart';
 
 class CheckoutScreen extends StatefulWidget {
   final AddressModel selectedAddress;
@@ -22,10 +27,20 @@ class CheckoutScreen extends StatefulWidget {
 }
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
-  String _selectedPaymentMethod = 'Kapıda Ödeme';
+  String _selectedPaymentMethod = 'Nakit';
   bool _isSubmitting = false;
 
-  Future<void> _submitOrder(String jwtToken) async {
+  Future<void> _submitOrder() async {
+    if (!SessionManager.instance.isAuthenticated) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Siparişi tamamlamak için lütfen önce giriş yapın.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     setState(() => _isSubmitting = true);
 
     final url = Uri.parse('${AppConstants.baseUrl}/api/orders');
@@ -38,28 +53,70 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
 
     try {
-      final response = await http.post(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $jwtToken',
-        },
-        body: jsonEncode(orderData.toJson()),
-      );
+      final response = await http
+          .post(
+            url,
+            headers: SessionManager.instance.authHeaders(),
+            body: jsonEncode(orderData.toJson()),
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 201 && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('🎉 Siparişiniz başarıyla oluşturuldu!'),
-            backgroundColor: Colors.green,
+        CartManager().clear();
+        await showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.green),
+                SizedBox(width: 8),
+                Text('Sipariş Alındı'),
+              ],
+            ),
+            content: Text(
+              'Siparişiniz başarıyla oluşturuldu.\nÖdeme Yöntemi: $_selectedPaymentMethod',
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppConstants.primaryColor,
+                ),
+                child: const Text('Tamam'),
+              ),
+            ],
           ),
         );
-        // Sipariş başarılıysa ana sayfaya veya sipariş geçmişine yönlendir
-        Navigator.popUntil(context, (route) => route.isFirst);
-      } else if (mounted) {
+        if (mounted) {
+          Navigator.popUntil(context, (route) => route.isFirst);
+        }
+      } else if (response.statusCode == 401 && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Sipariş verilemedi: ${response.body}'),
+          const SnackBar(
+            content: Text('Oturum süreniz doldu. Lütfen tekrar giriş yapın.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      } else if (mounted) {
+        String errorMessage = 'Sipariş verilemedi (${response.statusCode}).';
+        try {
+          final body = jsonDecode(response.body);
+          if (body is Map && body['error'] != null) {
+            errorMessage = body['error'].toString();
+          }
+        } catch (_) {}
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(errorMessage), backgroundColor: Colors.red),
+        );
+      }
+    } on TimeoutException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Sipariş gönderilemedi. Sunucu yanıt vermedi, lütfen tekrar deneyin.',
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -68,7 +125,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('❌ Bağlantı hatası: $e'),
+            content: Text('Bağlantı hatası: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -80,6 +137,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final addressSubtitle =
+        widget.selectedAddress.district.isNotEmpty &&
+            !widget.selectedAddress.fullAddress.contains(
+              widget.selectedAddress.district,
+            )
+        ? '${widget.selectedAddress.fullAddress}\n${widget.selectedAddress.district}'
+        : widget.selectedAddress.fullAddress;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Siparişi Tamamla'),
@@ -90,21 +155,31 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         padding: const EdgeInsets.all(16.0),
         children: [
           // 1. Adres Özeti
-          const Text('Teslimat Adresi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text(
+            'Teslimat Adresi',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
           const SizedBox(height: 8),
           Card(
             child: ListTile(
-              leading: const Icon(Icons.location_on, color: AppConstants.primaryColor),
-              title: Text(widget.selectedAddress.title, style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text(
-                '${widget.selectedAddress.fullAddress}\n${widget.selectedAddress.district}/${widget.selectedAddress.city}',
+              leading: const Icon(
+                Icons.location_on,
+                color: AppConstants.primaryColor,
               ),
+              title: Text(
+                widget.selectedAddress.title,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text(addressSubtitle),
             ),
           ),
           const SizedBox(height: 20),
 
-          // 2. Ödeme Yöntemi Seçimi (RadioGroup Kullanımı)
-          const Text('Ödeme Yöntemi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          // 2. Ödeme Yöntemi Seçimi
+          const Text(
+            'Ödeme Yöntemi',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
           const SizedBox(height: 8),
           Card(
             child: RadioGroup<String>(
@@ -114,15 +189,32 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   setState(() => _selectedPaymentMethod = val);
                 }
               },
-              child: Column(
-                children: const [
+              child: const Column(
+                children: [
                   RadioListTile<String>(
-                    title: Text('Kapıda Ödeme (Nakit/Kredi Kartı)'),
-                    value: 'Kapıda Ödeme',
+                    value: 'Nakit',
+                    title: Text(
+                      'Nakit',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text('Teslimatta nakit ödeme'),
+                    secondary: Icon(
+                      Icons.payments_outlined,
+                      color: AppConstants.primaryColor,
+                    ),
                   ),
+                  Divider(height: 1),
                   RadioListTile<String>(
-                    title: Text('Online Kredi Kartı'),
-                    value: 'Kredi Kartı',
+                    value: 'Banka / Kredi Kartı',
+                    title: Text(
+                      'Banka / Kredi Kartı',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text('Banka veya kredi kartı ile ödeme'),
+                    secondary: Icon(
+                      Icons.credit_card_outlined,
+                      color: AppConstants.primaryColor,
+                    ),
                   ),
                 ],
               ),
@@ -130,18 +222,78 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ),
           const SizedBox(height: 20),
 
-          // 3. Tutar ve Onay
+          // 3. Sipariş Özeti
+          const Text(
+            'Sipariş Özeti',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Column(
+                children: widget.cartItems
+                    .map(
+                      (item) => ListTile(
+                        dense: true,
+                        title: Text(
+                          item.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text('${item.quantity} adet'),
+                        trailing: Text(
+                          '${(item.price * item.quantity).toStringAsFixed(2)} TL',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // 4. Tutar ve Onay
           Card(
             color: Colors.grey.shade100,
             child: Padding(
               padding: const EdgeInsets.all(16.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Column(
                 children: [
-                  const Text('Toplam Tutar:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  Text(
-                    '${widget.totalPrice.toStringAsFixed(2)} ₺',
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppConstants.primaryColor),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Seçilen Ödeme Yöntemi:',
+                        style: TextStyle(color: AppConstants.textSecondary),
+                      ),
+                      Text(
+                        _selectedPaymentMethod,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Toplam Tutar:',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        '${widget.totalPrice.toStringAsFixed(2)} TL',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: AppConstants.primaryColor,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -149,18 +301,36 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ),
           const SizedBox(height: 24),
 
-          // 4. Siparişi Onayla Butonu
+          // 5. Siparişi Onayla Butonu
           SizedBox(
             height: AppConstants.buttonHeight,
             child: ElevatedButton(
-              onPressed: _isSubmitting ? null : () => _submitOrder("MEVCUT_JWT_TOKEN"),
+              onPressed: _isSubmitting ? null : _submitOrder,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppConstants.primaryColor,
                 foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(
+                    AppConstants.defaultRadius,
+                  ),
+                ),
               ),
               child: _isSubmitting
-                  ? const CircularProgressIndicator(color: Colors.white)
-                  : const Text('Siparişi Onayla ve Bitir', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2.5,
+                      ),
+                    )
+                  : const Text(
+                      'Siparişi Onayla ve Bitir',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
             ),
           ),
         ],

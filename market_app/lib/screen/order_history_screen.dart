@@ -26,7 +26,9 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
 
   Future<List<OrderHistory>> _fetchOrders() async {
     if (!SessionManager.instance.isAuthenticated) {
-      throw Exception('Sipariş geçmişinizi görüntülemek için lütfen giriş yapın.');
+      throw Exception(
+        'Sipariş geçmişinizi görüntülemek için lütfen giriş yapın.',
+      );
     }
 
     try {
@@ -78,7 +80,8 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
           }
 
           if (snapshot.hasError) {
-            final isAuthError = !SessionManager.instance.isAuthenticated ||
+            final isAuthError =
+                !SessionManager.instance.isAuthenticated ||
                 snapshot.error.toString().contains('giriş') ||
                 snapshot.error.toString().contains('Oturum');
             return _OrderHistoryMessage(
@@ -186,6 +189,16 @@ class _OrderCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(order.formattedDate),
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'Ödeme: ${order.paymentMethod}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppConstants.textSecondary,
+                  ),
+                ),
+              ),
               if (order.shippingAddress.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
@@ -193,7 +206,10 @@ class _OrderCard extends StatelessWidget {
                     'Adres: ${order.shippingAddress}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: AppConstants.textSecondary),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppConstants.textSecondary,
+                    ),
                   ),
                 ),
             ],
@@ -279,6 +295,7 @@ class OrderHistory {
     required this.items,
     this.status = 'Hazırlanıyor',
     this.shippingAddress = '',
+    this.paymentMethod = 'Nakit',
   });
 
   final int id;
@@ -287,6 +304,7 @@ class OrderHistory {
   final List<OrderHistoryItem> items;
   final String status;
   final String shippingAddress;
+  final String paymentMethod;
 
   factory OrderHistory.fromJson(Map<String, dynamic> json) {
     return OrderHistory(
@@ -295,6 +313,7 @@ class OrderHistory {
       createdAt: DateTime.tryParse(json['created_at']?.toString() ?? ''),
       status: json['status']?.toString() ?? 'Hazırlanıyor',
       shippingAddress: json['shipping_address']?.toString() ?? '',
+      paymentMethod: json['payment_method']?.toString() ?? 'Nakit',
       items: (json['items'] as List<dynamic>? ?? [])
           .map(
             (item) => OrderHistoryItem.fromJson(item as Map<String, dynamic>),

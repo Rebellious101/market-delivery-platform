@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kampanyayı Düzenle | Market Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<header class="topbar">
+    <div>
+        <p class="eyebrow">PAZARLAMA & FIRSATLAR</p>
+        <h1>Kampanyayı Düzenle</h1>
+    </div>
+    <nav class="nav-links">
+        <a href="{{ url_for('admin_dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('admin_campaigns') }}">Kampanyalar</a>
+        <a href="{{ url_for('admin_products') }}">Ürünler</a>
+        <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
+        <a href="{{ url_for('admin_orders') }}">Siparişler</a>
+        <a href="{{ url_for('admin_logout') }}">Çıkış</a>
+    </nav>
+</header>
+<main class="admin-shell narrow-shell">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+    <section class="panel">
+        <div class="panel-heading">
+            <div>
+                <p class="eyebrow">KAMPANYA #{{ campaign.id }}</p>
+                <h2>{{ campaign.title }}</h2>
+            </div>
+        </div>
+        <form method="POST" enctype="multipart/form-data" class="product-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label>
+                Kampanya başlığı
+                <input type="text" name="title" value="{{ campaign.title }}" required>
+            </label>
+            <label>
+                Rozet / Etiket (isteğe bağlı)
+                <input type="text" name="badge_text" value="{{ campaign.badge_text or '' }}" placeholder="Örn. %25 İndirim">
+            </label>
+            <label class="full-width">
+                Kampanya açıklaması
+                <textarea name="description" rows="3">{{ campaign.description or '' }}</textarea>
+            </label>
+            <label class="upload-field full-width">
+                Yeni görsel yükle (isteğe bağlı)
+                <input type="file" name="image" accept="image/jpeg,image/png,image/webp,image/gif">
+                <small>Boş bırakırsanız mevcut görsel korunur.</small>
+            </label>
+            <div class="form-actions full-width" style="gap: 10px;">
+                <a class="button button-secondary" href="{{ url_for('admin_campaigns') }}">Vazgeç</a>
+                <button class="button button-primary" type="submit">Değişiklikleri kaydet</button>
+            </div>
+        </form>
+    </section>
+</main>
+</body>
+</html>
+

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kampanya Yönetimi | Market Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<header class="topbar">
+    <div>
+        <p class="eyebrow">MARKET ADMIN</p>
+        <h1>Kampanya Yönetimi</h1>
+    </div>
+    <nav class="nav-links">
+        <a href="{{ url_for('admin_dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('admin_products') }}">Ürünler</a>
+        <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
+        <a href="{{ url_for('admin_campaigns') }}">Kampanyalar</a>
+        <a href="{{ url_for('admin_orders') }}">Siparişler</a>
+        <a href="{{ url_for('admin_logout') }}">Çıkış</a>
+    </nav>
+</header>
+
+<main class="admin-shell">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+
+    <section class="page-intro">
+        <div>
+            <p class="eyebrow">PAZARLAMA & FIRSATLAR</p>
+            <h2>Mobil uygulama kampanyaları</h2>
+            <p class="muted">Buradan eklenen ve yayında olan kampanyalar mobil uygulamanın Kampanyalar sekmesinde ve ana ekran afişinde görünür.</p>
+        </div>
+        <div class="stat-pill">{{ campaigns|length }} kampanya</div>
+    </section>
+
+    <section class="panel add-product-panel">
+        <div class="panel-heading">
+            <div>
+                <p class="eyebrow">YENİ KAMPANYA</p>
+                <h2>Kampanya oluştur</h2>
+            </div>
+            <span class="status-dot">Mobil uygulamaya hazır</span>
+        </div>
+        <form method="POST" enctype="multipart/form-data" class="product-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label>
+                Kampanya başlığı
+                <input type="text" name="title" placeholder="Örn. Hafta Sonu %25 İndirim" required>
+            </label>
+            <label>
+                Rozet / Etiket (isteğe bağlı)
+                <input type="text" name="badge_text" placeholder="Örn. %25 İndirim, 2 Al 1 Öde, Fırsat">
+            </label>
+            <label class="full-width">
+                Kampanya açıklaması
+                <textarea name="description" rows="3" placeholder="Kampanya koşullarını ve detaylarını yazın"></textarea>
+            </label>
+            <label class="upload-field full-width">
+                Kampanya görseli (isteğe bağlı)
+                <input type="file" name="image" accept="image/jpeg,image/png,image/webp,image/gif">
+                <small>JPG, PNG, WEBP veya GIF. Yüklenmezse varsayılan kampanya tasarımı gösterilir.</small>
+            </label>
+            <div class="form-actions full-width">
+                <button class="button button-primary" type="submit">Kampanyayı yayınla</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="panel">
+        <div class="panel-heading">
+            <div>
+                <p class="eyebrow">MEVCUT KAMPANYALAR</p>
+                <h2>Kampanya listesi</h2>
+            </div>
+        </div>
+        <div class="product-table-wrap">
+            <table class="product-table">
+                <thead>
+                    <tr>
+                        <th>Kampanya</th>
+                        <th>Etiket</th>
+                        <th>Açıklama</th>
+                        <th>Durum</th>
+                        <th>İşlem</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for campaign in campaigns %}
+                    <tr>
+                        <td class="product-cell">
+                            {% if campaign.image %}
+                                <img src="{{ url_for('static', filename='uploads/' ~ campaign.image) }}" alt="{{ campaign.title }}">
+                            {% else %}
+                                <div class="image-placeholder">%</div>
+                            {% endif %}
+                            <div>
+                                <strong>{{ campaign.title }}</strong>
+                                <small>#{{ campaign.id }}</small>
+                            </div>
+                        </td>
+                        <td>{{ campaign.badge_text or '-' }}</td>
+                        <td>{{ campaign.description or '-' }}</td>
+                        <td>
+                            <span class="badge {% if campaign.active %}badge-success{% else %}badge-muted{% endif %}">
+                                {% if campaign.active %}Yayında{% else %}Pasif{% endif %}
+                            </span>
+                        </td>
+                        <td class="actions-cell">
+                            <a class="table-action" href="{{ url_for('admin_edit_campaign', campaign_id=campaign.id) }}">Düzenle</a>
+                            <form method="POST" action="{{ url_for('admin_toggle_campaign', campaign_id=campaign.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button class="table-action table-action-muted" type="submit">
+                                    {% if campaign.active %}Pasifleştir{% else %}Yayınla{% endif %}
+                                </button>
+                            </form>
+                            <form method="POST" action="{{ url_for('admin_delete_campaign', campaign_id=campaign.id) }}" onsubmit="return confirm('Bu kampanyayı silmek istediğinize emin misiniz?');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button class="table-action" type="submit" style="background: #fbe6e4; color: #9b3029;">Sil</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5" class="empty-cell">Henüz kampanya eklenmemiş.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</body>
+</html>
+

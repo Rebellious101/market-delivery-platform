@@ -16,8 +16,8 @@
     <nav class="nav-links">
         <a href="{{ url_for('admin_products') }}">Ürünler</a>
         <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
+        <a href="{{ url_for('admin_campaigns') }}">Kampanyalar</a>
         <a href="{{ url_for('admin_orders') }}">Siparişler</a>
-        <a href="/">Mağazayı Gör</a>
         <a href="{{ url_for('admin_logout') }}">Çıkış</a>
     </nav>
 </header>
@@ -27,9 +27,12 @@
         <div>
             <p class="eyebrow">GENEL BAKIŞ</p>
             <h2>Bugünün operasyon özeti</h2>
-            <p class="muted">Katalog, stok ve sipariş durumunu tek ekrandan takip et.</p>
+            <p class="muted">Katalog, stok, kampanya ve sipariş durumunu tek ekrandan takip et.</p>
         </div>
-        <a class="button button-primary" href="{{ url_for('admin_products') }}">+ Ürün ekle</a>
+        <div style="display: flex; gap: 10px;">
+            <a class="button button-secondary" href="{{ url_for('admin_campaigns') }}">+ Kampanya ekle</a>
+            <a class="button button-primary" href="{{ url_for('admin_products') }}">+ Ürün ekle</a>
+        </div>
     </section>
     <section class="metrics-grid">
         <div class="metric-card"><span>Aktif ürün</span><strong>{{ active_product_count }}</strong><small>{{ product_count }} toplam kayıt</small></div>
@@ -42,6 +45,7 @@
             <div class="panel-heading"><div><p class="eyebrow">HIZLI ERİŞİM</p><h2>Yönetim</h2></div></div>
             <a class="quick-link" href="{{ url_for('admin_products') }}"><span>Ürün kataloğu</span><b>→</b></a>
             <a class="quick-link" href="{{ url_for('admin_categories') }}"><span>Kategori düzeni</span><b>→</b></a>
+            <a class="quick-link" href="{{ url_for('admin_campaigns') }}"><span>Kampanyalar</span><b>→</b></a>
             <a class="quick-link" href="{{ url_for('admin_orders') }}"><span>Sipariş takibi</span><b>→</b></a>
         </div>
         <div class="panel">

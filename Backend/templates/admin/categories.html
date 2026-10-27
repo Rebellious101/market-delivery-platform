@@ -15,6 +15,7 @@
     <nav class="nav-links">
         <a href="{{ url_for('admin_dashboard') }}">Dashboard</a>
         <a href="{{ url_for('admin_products') }}">Ürünler</a>
+        <a href="{{ url_for('admin_campaigns') }}">Kampanyalar</a>
         <a href="{{ url_for('admin_orders') }}">Siparişler</a>
         <a href="{{ url_for('admin_logout') }}">Çıkış</a>
     </nav>
@@ -71,59 +72,6 @@
                 <p class="muted">Henüz kategori bulunmuyor.</p>
             {% endfor %}
         </div>
-    </section>
-</main>
-</body>
-</html>
-3. Adım: Yeni edit_category.html Şablonunun Oluşturulması
-templates/admin/ dizini altına edit_category.html adında yeni bir dosya oluşturup aşağıdaki kodları yapıştırın:
-
-HTML
-<!DOCTYPE html>
-<html lang="tr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kategoriyi Düzenle | Market Admin</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-</head>
-<body>
-<header class="topbar">
-    <div>
-        <p class="eyebrow">KATALOG YAPISI</p>
-        <h1>Kategoriyi Düzenle</h1>
-    </div>
-    <nav class="nav-links">
-        <a href="{{ url_for('admin_dashboard') }}">Dashboard</a>
-        <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
-        <a href="{{ url_for('admin_products') }}">Ürünler</a>
-        <a href="{{ url_for('admin_logout') }}">Çıkış</a>
-    </nav>
-</header>
-<main class="admin-shell narrow-shell">
-    {% with messages = get_flashed_messages(with_categories=true) %}
-        {% for category, message in messages %}
-            <div class="flash flash-{{ category }}">{{ message }}</div>
-        {% endfor %}
-    {% endwith %}
-    <section class="panel">
-        <div class="panel-heading">
-            <div>
-                <p class="eyebrow">KATEGORİ #{{ category.id }}</p>
-                <h2>{{ category.name }}</h2>
-            </div>
-        </div>
-        <form method="POST" class="product-form">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <label class="full-width">
-                Kategori adı
-                <input type="text" name="name" value="{{ category.name }}" required>
-            </label>
-            <div class="form-actions full-width" style="gap: 10px;">
-                <a class="button button-secondary" href="{{ url_for('admin_categories') }}">Vazgeç</a>
-                <button class="button button-primary" type="submit">Değişiklikleri kaydet</button>
-            </div>
-        </form>
     </section>
 </main>
 </body>

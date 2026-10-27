@@ -2,13 +2,17 @@ import datetime
 import logging
 import os
 import secrets
+import shutil
+import subprocess
+import threading
+import time
 from contextlib import contextmanager
+from decimal import Decimal
 from functools import wraps
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import jwt
-from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity
 from dotenv import load_dotenv
 from flask import (
     Flask,
@@ -29,7 +33,28 @@ from werkzeug.utils import secure_filename
 # ---------------------------------------------------------------------------
 # 0. Ortam Değişkenleri ve Konfigürasyon
 # ---------------------------------------------------------------------------
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
+
+def require_environment_variable(name: str, *, minimum_length: int = 1) -> str:
+    value = os.getenv(name)
+    if not value or len(value) < minimum_length:
+        raise RuntimeError(
+            f"{name} must be set to a value with at least {minimum_length} characters."
+        )
+    return value
+
+
+def require_database_port() -> int:
+    value = require_environment_variable("DB_PORT")
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise RuntimeError("DB_PORT must be an integer between 1 and 65535.") from exc
+    if not 1 <= port <= 65535:
+        raise RuntimeError("DB_PORT must be an integer between 1 and 65535.")
+    return port
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,16 +63,15 @@ logging.basicConfig(
 logger = logging.getLogger("market_app")
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "default-dev-key-change-in-production")
+app.config["SECRET_KEY"] = require_environment_variable("FLASK_SECRET_KEY", minimum_length=32)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # Maksimum 5 MB dosya yükleme sınırı
-app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "default-jwt-dev-secret-change-it")
+app.config["JWT_SECRET_KEY"] = require_environment_variable("JWT_SECRET_KEY", minimum_length=32)
 
 JWT_SECRET_KEY = app.config["JWT_SECRET_KEY"]
-jwt_manager = JWTManager(app)
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+ADMIN_USERNAME = require_environment_variable("ADMIN_USERNAME")
+ADMIN_PASSWORD = require_environment_variable("ADMIN_PASSWORD", minimum_length=12)
 
 UPLOAD_FOLDER = os.path.join(app.root_path, "static", "uploads")
 ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif"}
@@ -56,16 +80,22 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # ---------------------------------------------------------------------------
 # 1. MySQL Bağlantı Havuzu (Thread-Safe Connection Pool)
 # ---------------------------------------------------------------------------
+DB_HOST = require_environment_variable("DB_HOST")
+DB_PORT = require_database_port()
+DB_USER = require_environment_variable("DB_USER")
+DB_PASSWORD = require_environment_variable("DB_PASSWORD")
+DB_NAME = require_environment_variable("DB_NAME")
+
 try:
     db_pool = pooling.MySQLConnectionPool(
         pool_name="market_pool",
         pool_size=10,
         pool_reset_session=True,
-        host=os.getenv("DB_HOST", "localhost"),
-        port=int(os.getenv("DB_PORT", 3306)),
-        user=os.getenv("DB_USER", "market_admin"),
-        password=os.getenv("DB_PASSWORD", ""),
-        database=os.getenv("DB_NAME", "market_db"),
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_NAME,
         use_pure=True,
     )
     logger.info("MySQL Bağlantı Havuzu (Connection Pool) başarıyla başlatıldı.")
@@ -101,6 +131,23 @@ def init_database_schema() -> None:
         )
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS user_addresses (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                title VARCHAR(50) NOT NULL,
+                full_address TEXT NOT NULL,
+                city VARCHAR(50) NOT NULL,
+                district VARCHAR(50) NOT NULL,
+                latitude DECIMAL(10, 8) NULL,
+                longitude DECIMAL(11, 8) NULL,
+                is_default TINYINT(1) NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS categories (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(100) NOT NULL UNIQUE
@@ -129,12 +176,18 @@ def init_database_schema() -> None:
                 user_id INT NULL,
                 total_price DECIMAL(10, 2) NOT NULL,
                 shipping_address TEXT NULL,
+                payment_method VARCHAR(50) NOT NULL DEFAULT 'Nakit',
                 status VARCHAR(50) NOT NULL DEFAULT 'Hazırlanıyor',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
             )
             """
         )
+        cursor.execute("SHOW COLUMNS FROM orders LIKE 'payment_method'")
+        if not cursor.fetchone():
+            cursor.execute(
+                "ALTER TABLE orders ADD COLUMN payment_method VARCHAR(50) NOT NULL DEFAULT 'Nakit' AFTER shipping_address"
+            )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS order_items (
@@ -145,6 +198,19 @@ def init_database_schema() -> None:
                 price DECIMAL(10, 2) NOT NULL,
                 FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
                 FOREIGN KEY (product_id) REFERENCES products(id)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS campaigns (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                title VARCHAR(150) NOT NULL,
+                description TEXT NULL,
+                badge_text VARCHAR(60) NULL,
+                image VARCHAR(255) NULL,
+                active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -169,13 +235,15 @@ class LoginRequest(BaseModel):
 
 
 class OrderItemRequest(BaseModel):
-    product_id: int = Field(gt=0)
-    quantity: int = Field(gt=0)
+    product_id: int = Field(gt=0, strict=True)
+    quantity: int = Field(gt=0, le=2147483647, strict=True)
 
 
 class CreateOrderRequest(BaseModel):
-    items: List[OrderItemRequest] = Field(min_length=1)
+    items: List[OrderItemRequest] = Field(min_length=1, max_length=100)
     shipping_address: Optional[str] = Field(default=None, max_length=500)
+    full_address: Optional[str] = Field(default=None, max_length=500)
+    payment_method: Optional[str] = Field(default="Nakit", max_length=50)
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +471,31 @@ def api_products():
             cursor.close()
 
 
+@app.get("/api/campaigns")
+def api_campaigns():
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute(
+                """
+                SELECT id, title, description, badge_text, image, created_at
+                FROM campaigns
+                WHERE active = TRUE
+                ORDER BY id DESC
+                """
+            )
+            rows = cursor.fetchall()
+            for row in rows:
+                if row.get("created_at"):
+                    row["created_at"] = row["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+            return jsonify(rows)
+        except Exception:
+            logger.exception("Kampanyalar getirilirken hata")
+            return jsonify({"error": "Kampanyalar yüklenemedi."}), 500
+        finally:
+            cursor.close()
+
+
 @app.post("/api/orders")
 @token_required
 def api_create_order():
@@ -418,64 +511,81 @@ def api_create_order():
         return jsonify({"error": f"Geçersiz sipariş verisi: {first_error}"}), 400
 
     user_id = request.current_user["user_id"]
-    shipping_address = req.shipping_address or ""
+    shipping_address = req.shipping_address or req.full_address or ""
+    quantities_by_product: Dict[int, int] = {}
+    for item in req.items:
+        quantities_by_product[item.product_id] = (
+            quantities_by_product.get(item.product_id, 0) + item.quantity
+        )
+        if quantities_by_product[item.product_id] > 2147483647:
+            return jsonify({"error": "Bir ürün için istenen miktar izin verilen sınırı aşıyor."}), 400
 
     with get_db() as conn:
         cursor = conn.cursor(dictionary=True)
         try:
-            # 1. Ürün bilgisi ve fiyatlarını al
-            p_ids = [item.product_id for item in req.items]
+            p_ids = sorted(quantities_by_product)
             format_strings = ",".join(["%s"] * len(p_ids))
+            conn.start_transaction()
             cursor.execute(
-                f"SELECT id, name, price, stock FROM products WHERE id IN ({format_strings}) AND active = TRUE",
+                f"""
+                SELECT id, name, price, stock
+                FROM products
+                WHERE id IN ({format_strings}) AND active = TRUE
+                ORDER BY id
+                FOR UPDATE
+                """,
                 tuple(p_ids),
             )
             products_db = {p["id"]: p for p in cursor.fetchall()}
 
-            # Tüm istenen ürünler mevcut mu kontrol et
-            for item in req.items:
-                if item.product_id not in products_db:
-                    return jsonify({"error": f"Ürün bulunamadı veya satışta değil (ID: {item.product_id})"}), 404
+            for product_id in p_ids:
+                if product_id not in products_db:
+                    conn.rollback()
+                    return jsonify({"error": f"Ürün bulunamadı veya satışta değil (ID: {product_id})"}), 404
 
-            total_price = 0.0
+            total_price = Decimal("0.00")
             order_details = []
+            for product_id, quantity in quantities_by_product.items():
+                product = products_db[product_id]
+                item_price = Decimal(str(product["price"])).quantize(Decimal("0.01"))
+                total_price += item_price * quantity
+                order_details.append({
+                    "product_id": product_id,
+                    "quantity": quantity,
+                    "price": item_price,
+                })
 
-            # 2. Stokları atomik düşür ve toplam tutarı hesapla
-            for item in req.items:
-                pid = item.product_id
-                qty = item.quantity
-                prod = products_db[pid]
-                item_price = float(prod["price"])
-                total_price += item_price * qty
+            if total_price > Decimal("99999999.99"):
+                conn.rollback()
+                return jsonify({"error": "Sipariş toplamı izin verilen tutarı aşıyor."}), 400
 
-                # Atomik Stok Güncellemesi: Eşzamanlı iki işlemde stok eksiye düşemez
+            # Conditional updates keep stock nonnegative; all changes roll back if any item fails.
+            for detail in order_details:
+                product_id = detail["product_id"]
+                quantity = detail["quantity"]
+                product = products_db[product_id]
                 cursor.execute(
                     """
                     UPDATE products 
                     SET stock = stock - %s 
                     WHERE id = %s AND stock >= %s AND active = TRUE
                     """,
-                    (qty, pid, qty),
+                    (quantity, product_id, quantity),
                 )
                 if cursor.rowcount == 0:
                     conn.rollback()
                     return jsonify({
-                        "error": f"Yetersiz stok! '{prod['name']}' ürününden en fazla {prod['stock']} adet alınabilir."
+                        "error": f"Yetersiz stok! '{product['name']}' ürününden en fazla {product['stock']} adet alınabilir."
                     }), 400
 
-                order_details.append({
-                    "product_id": pid,
-                    "quantity": qty,
-                    "price": item_price,
-                })
-
-            # 3. Ana siparişi kullanıcı kimliği ve adresle kaydet
+            # 3. Ana siparişi kullanıcı kimliği, adres ve ödeme yöntemiyle kaydet
+            payment_method = (req.payment_method or "Nakit").strip() or "Nakit"
             cursor.execute(
                 """
-                INSERT INTO orders (user_id, total_price, shipping_address, status) 
-                VALUES (%s, %s, %s, 'Hazırlanıyor')
+                INSERT INTO orders (user_id, total_price, shipping_address, payment_method, status) 
+                VALUES (%s, %s, %s, %s, 'Hazırlanıyor')
                 """,
-                (user_id, total_price, shipping_address),
+                (user_id, total_price, shipping_address, payment_method),
             )
             order_id = cursor.lastrowid
 
@@ -490,11 +600,15 @@ def api_create_order():
                 )
 
             conn.commit()
-            logger.info(f"Sipariş #{order_id} kullanıcı #{user_id} tarafından oluşturuldu. Tutar: {total_price} TL")
+            logger.info(
+                f"Sipariş #{order_id} kullanıcı #{user_id} tarafından oluşturuldu. "
+                f"Tutar: {total_price} TL, Ödeme: {payment_method}"
+            )
             return jsonify({
                 "success": True,
                 "order_id": order_id,
-                "total_price": total_price,
+                "total_price": float(total_price),
+                "payment_method": payment_method,
                 "status": "Hazırlanıyor",
             }), 201
 
@@ -523,6 +637,7 @@ def api_get_orders():
                     o.id as order_id, 
                     o.total_price, 
                     o.shipping_address,
+                    o.payment_method,
                     o.status,
                     o.created_at, 
                     oi.quantity, 
@@ -546,6 +661,7 @@ def api_get_orders():
                         "order_id": oid,
                         "total_price": float(row["total_price"]),
                         "shipping_address": row["shipping_address"] or "",
+                        "payment_method": row["payment_method"] or "Nakit",
                         "status": row["status"] or "Hazırlanıyor",
                         "created_at": row["created_at"].strftime("%Y-%m-%d %H:%M:%S") if row["created_at"] else None,
                         "items": [],
@@ -567,21 +683,21 @@ def api_get_orders():
 class AddressCreateSchema(BaseModel):
     title: str = Field(..., min_length=2, max_length=50)
     full_address: str = Field(..., min_length=10)
-    city: str = Field(..., min_length=2)
-    district: str = Field(..., min_length=2)
+    city: str = Field(default="Gazimağusa", min_length=2)
+    district: str = Field(default="Gazimağusa", min_length=2)
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
 
 @app.get("/api/addresses")
 @token_required
-def get_user_addresses(current_user):
+def get_user_addresses():
     with get_db() as conn:
         cursor = conn.cursor(dictionary=True)
         cursor.execute(
             "SELECT id, title, full_address, city, district, latitude, longitude, is_default "
             "FROM user_addresses WHERE user_id = %s ORDER BY id DESC",
-            (current_user["id"],)
+            (request.current_user["user_id"],)
         )
         addresses = cursor.fetchall()
         cursor.close()
@@ -590,9 +706,9 @@ def get_user_addresses(current_user):
 
 @app.post("/api/addresses")
 @token_required
-def add_user_address(current_user):
+def add_user_address():
     try:
-        data = AddressCreateSchema(**request.json)
+        data = AddressCreateSchema(**(request.get_json(silent=True) or {}))
     except ValidationError as e:
         return jsonify({"success": False, "errors": e.errors()}), 422
 
@@ -604,7 +720,7 @@ def add_user_address(current_user):
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                current_user["id"],
+                request.current_user["user_id"],
                 data.title,
                 data.full_address,
                 data.city,
@@ -622,12 +738,12 @@ def add_user_address(current_user):
 
 @app.delete("/api/addresses/<int:address_id>")
 @token_required
-def delete_user_address(current_user, address_id: int):
+def delete_user_address(address_id: int):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             "DELETE FROM user_addresses WHERE id = %s AND user_id = %s",
-            (address_id, current_user["id"])
+            (address_id, request.current_user["user_id"])
         )
         conn.commit()
         affected = cursor.rowcount
@@ -647,7 +763,9 @@ def admin_login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
-        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+        if secrets.compare_digest(username, ADMIN_USERNAME) and secrets.compare_digest(
+            password, ADMIN_PASSWORD
+        ):
             session.clear()
             session["admin_authenticated"] = True
             session["admin_username"] = username
@@ -746,7 +864,8 @@ def admin_products():
                 cursor.close()
                 return redirect(url_for("admin_products"))
 
-            extension = image.filename.rsplit(".", 1)[-1].lower() if "." in image.filename else ""
+            safe_name = secure_filename(image.filename)
+            extension = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
             if extension not in ALLOWED_IMAGE_EXTENSIONS:
                 flash("Sadece JPG, JPEG, PNG, WEBP veya GIF görselleri yükleyebilirsiniz.", "error")
                 cursor.close()
@@ -956,6 +1075,7 @@ def admin_orders():
                     o.id as order_id, 
                     o.total_price, 
                     o.shipping_address,
+                    o.payment_method,
                     o.status,
                     o.created_at, 
                     u.name as user_name,
@@ -980,6 +1100,7 @@ def admin_orders():
                         "order_id": oid,
                         "total_price": float(row["total_price"]),
                         "shipping_address": row["shipping_address"] or "Belirtilmemiş",
+                        "payment_method": row["payment_method"] or "Nakit",
                         "status": row["status"] or "Hazırlanıyor",
                         "user_name": row["user_name"] or "Misafir Kullanıcı",
                         "user_email": row["user_email"] or "-",
@@ -1033,12 +1154,48 @@ def admin_update_order_status(order_id: int):
 
     if new_status in valid_statuses:
         with get_db() as conn:
-            cursor = conn.cursor()
+            cursor = conn.cursor(dictionary=True)
             try:
+                conn.start_transaction()
                 cursor.execute(
-                    "UPDATE orders SET status = %s WHERE id = %s",
-                    (new_status, order_id)
+                    "SELECT status FROM orders WHERE id = %s FOR UPDATE",
+                    (order_id,),
                 )
+                order = cursor.fetchone()
+                if not order:
+                    conn.rollback()
+                    flash("Sipariş bulunamadı.", "error")
+                    return redirect(url_for("admin_orders"))
+
+                old_status = order["status"]
+                if old_status != new_status:
+                    cursor.execute(
+                        "UPDATE orders SET status = %s WHERE id = %s",
+                        (new_status, order_id),
+                    )
+                    # Sipariş iptal edildiyse stokları iade et
+                    if new_status == "İptal Edildi" and old_status != "İptal Edildi":
+                        cursor.execute(
+                            "SELECT product_id, quantity FROM order_items WHERE order_id = %s",
+                            (order_id,),
+                        )
+                        for item in cursor.fetchall():
+                            cursor.execute(
+                                "UPDATE products SET stock = stock + %s WHERE id = %s",
+                                (item["quantity"], item["product_id"]),
+                            )
+                    # İptal edilmiş bir sipariş tekrar aktif duruma alınırsa stoktan düş
+                    elif old_status == "İptal Edildi" and new_status != "İptal Edildi":
+                        cursor.execute(
+                            "SELECT product_id, quantity FROM order_items WHERE order_id = %s",
+                            (order_id,),
+                        )
+                        for item in cursor.fetchall():
+                            cursor.execute(
+                                "UPDATE products SET stock = GREATEST(0, stock - %s) WHERE id = %s",
+                                (item["quantity"], item["product_id"]),
+                            )
+
                 conn.commit()
                 flash(f"Sipariş #{order_id} durumu '{new_status}' olarak güncellendi.", "success")
             except Exception:
@@ -1107,27 +1264,215 @@ def admin_delete_category(category_id: int):
             
     return redirect(url_for("admin_categories"))
 
-@app.route('/api/orders', methods=['POST'])
-@jwt_required() # JWT token zorunluluğu
-def create_order():
-    current_user_id = get_jwt_identity()
-    data = request.get_json()
 
-    # Sipariş verilerini al
-    address_id = data.get('address_id')
-    items = data.get('items')
-    total_price = data.get('total_price')
-    payment_method = data.get('payment_method')
+# --- KAMPANYA YÖNETİMİ (ADMIN) ---
+@app.route("/admin/campaigns", methods=["GET", "POST"])
+@admin_required
+def admin_campaigns():
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        if request.method == "POST":
+            title = request.form.get("title", "").strip()
+            description = request.form.get("description", "").strip()
+            badge_text = request.form.get("badge_text", "").strip()
+            image = request.files.get("image")
 
-    if not items or not total_price:
-        return jsonify({'error': 'Geçersiz sipariş verisi'}), 400
+            if not title:
+                flash("Kampanya başlığı zorunludur.", "error")
+                cursor.close()
+                return redirect(url_for("admin_campaigns"))
 
-    # Veritabanı kayıt işlemi (Veritabanı modelinize göre uyarlayın)
-    # new_order = Order(user_id=current_user_id, address_id=address_id, total_price=total_price, payment_method=payment_method)
-    # db.session.add(new_order)
-    # db.session.commit()
+            filename = None
+            file_path = None
+            if image and image.filename:
+                safe_name = secure_filename(image.filename)
+                extension = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
+                if extension not in ALLOWED_IMAGE_EXTENSIONS:
+                    flash("Sadece JPG, JPEG, PNG, WEBP veya GIF görselleri yükleyebilirsiniz.", "error")
+                    cursor.close()
+                    return redirect(url_for("admin_campaigns"))
+                filename = f"{uuid4().hex}.{extension}"
+                file_path = os.path.join(UPLOAD_FOLDER, filename)
+                image.save(file_path)
 
-    return jsonify({'message': 'Sipariş başarıyla oluşturuldu'}), 201
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO campaigns (title, description, badge_text, image, active)
+                    VALUES (%s, %s, %s, %s, TRUE)
+                    """,
+                    (title, description, badge_text or None, filename),
+                )
+                conn.commit()
+                flash("Kampanya başarıyla oluşturuldu.", "success")
+            except Exception:
+                conn.rollback()
+                if file_path and os.path.exists(file_path):
+                    os.remove(file_path)
+                logger.exception("Kampanya ekleme hatası")
+                flash("Kampanya kaydedilemedi.", "error")
+            finally:
+                cursor.close()
+
+            return redirect(url_for("admin_campaigns"))
+
+        try:
+            cursor.execute(
+                """
+                SELECT id, title, description, badge_text, image, active, created_at
+                FROM campaigns
+                ORDER BY id DESC
+                """
+            )
+            campaigns = cursor.fetchall()
+            return render_template("admin/campaigns.html", campaigns=campaigns)
+        except Exception:
+            logger.exception("Kampanyalar listelenirken hata")
+            flash("Kampanyalar yüklenirken bir hata oluştu.", "error")
+            return render_template("admin/campaigns.html", campaigns=[])
+        finally:
+            cursor.close()
+
+
+@app.route("/admin/campaigns/edit/<int:campaign_id>", methods=["GET", "POST"])
+@admin_required
+def admin_edit_campaign(campaign_id: int):
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+
+        if request.method == "POST":
+            title = request.form.get("title", "").strip()
+            description = request.form.get("description", "").strip()
+            badge_text = request.form.get("badge_text", "").strip()
+            image = request.files.get("image")
+
+            if not title:
+                flash("Kampanya başlığı boş bırakılamaz.", "error")
+                cursor.close()
+                return redirect(url_for("admin_edit_campaign", campaign_id=campaign_id))
+
+            cursor.execute("SELECT image FROM campaigns WHERE id = %s", (campaign_id,))
+            campaign = cursor.fetchone()
+            if not campaign:
+                cursor.close()
+                flash("Kampanya bulunamadı.", "error")
+                return redirect(url_for("admin_campaigns"))
+
+            image_filename = campaign["image"]
+            new_image_path = None
+
+            if image and image.filename:
+                safe_name = secure_filename(image.filename)
+                extension = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
+                if extension not in ALLOWED_IMAGE_EXTENSIONS:
+                    cursor.close()
+                    flash("Geçersiz görsel formatı.", "error")
+                    return redirect(url_for("admin_edit_campaign", campaign_id=campaign_id))
+                image_filename = f"{uuid4().hex}.{extension}"
+                new_image_path = os.path.join(UPLOAD_FOLDER, image_filename)
+                image.save(new_image_path)
+
+            try:
+                cursor.execute(
+                    """
+                    UPDATE campaigns
+                    SET title = %s, description = %s, badge_text = %s, image = %s
+                    WHERE id = %s
+                    """,
+                    (title, description, badge_text or None, image_filename, campaign_id),
+                )
+                conn.commit()
+                if new_image_path and campaign["image"]:
+                    old_image_path = os.path.join(UPLOAD_FOLDER, campaign["image"])
+                    if os.path.exists(old_image_path):
+                        os.remove(old_image_path)
+                flash("Kampanya başarıyla güncellendi.", "success")
+            except Exception:
+                conn.rollback()
+                if new_image_path and os.path.exists(new_image_path):
+                    os.remove(new_image_path)
+                logger.exception("Kampanya güncelleme hatası")
+                flash("Kampanya güncellenemedi.", "error")
+            finally:
+                cursor.close()
+            return redirect(url_for("admin_campaigns"))
+
+        cursor.execute("SELECT * FROM campaigns WHERE id = %s", (campaign_id,))
+        campaign = cursor.fetchone()
+        cursor.close()
+        if not campaign:
+            flash("Kampanya bulunamadı.", "error")
+            return redirect(url_for("admin_campaigns"))
+        return render_template("admin/edit_campaign.html", campaign=campaign)
+
+
+@app.post("/admin/campaigns/toggle/<int:campaign_id>")
+@admin_required
+def admin_toggle_campaign(campaign_id: int):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("UPDATE campaigns SET active = NOT active WHERE id = %s", (campaign_id,))
+            conn.commit()
+            flash("Kampanya yayın durumu güncellendi.", "success")
+        except Exception:
+            conn.rollback()
+            logger.exception("Kampanya aktif/pasif durumu güncellenirken hata")
+            flash("İşlem gerçekleştirilemedi.", "error")
+        finally:
+            cursor.close()
+    return redirect(url_for("admin_campaigns"))
+
+
+@app.post("/admin/campaigns/delete/<int:campaign_id>")
+@admin_required
+def admin_delete_campaign(campaign_id: int):
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute("SELECT image FROM campaigns WHERE id = %s", (campaign_id,))
+            campaign = cursor.fetchone()
+            cursor.execute("DELETE FROM campaigns WHERE id = %s", (campaign_id,))
+            conn.commit()
+            if campaign and campaign.get("image"):
+                image_path = os.path.join(UPLOAD_FOLDER, campaign["image"])
+                if os.path.exists(image_path):
+                    os.remove(image_path)
+            flash("Kampanya silindi.", "success")
+        except Exception:
+            conn.rollback()
+            logger.exception("Kampanya silinirken hata")
+            flash("Kampanya silinemedi.", "error")
+        finally:
+            cursor.close()
+    return redirect(url_for("admin_campaigns"))
+
+def _keep_adb_reverse_alive(port: int = 5000) -> None:
+    """USB ile bağlı Android cihazlar için adb reverse tcp:5000 tcp:5000 köprüsünü sürekli aktif tutar."""
+    adb_path = shutil.which("adb")
+    if not adb_path:
+        default_sdk_adb = os.path.expanduser(
+            r"~\AppData\Local\Android\Sdk\platform-tools\adb.exe"
+        )
+        if os.path.exists(default_sdk_adb):
+            adb_path = default_sdk_adb
+    if not adb_path:
+        return
+    while True:
+        try:
+            subprocess.run(
+                [adb_path, "reverse", f"tcp:{port}", f"tcp:{port}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+        except Exception:
+            pass
+        time.sleep(5)
+
+
+threading.Thread(target=_keep_adb_reverse_alive, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)

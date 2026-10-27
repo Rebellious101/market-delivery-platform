@@ -1,14 +1,14 @@
-import 'dart:async';
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 
 import '../core/constants.dart';
 import '../core/localization.dart';
 import '../core/session_manager.dart';
-import 'cart_manager.dart';
+import '../models/address_model.dart';
+import '../models/order_model.dart';
 import 'address_book.dart';
+import 'auth_screen.dart';
+import 'cart_manager.dart';
+import 'checkout_screen.dart';
 import 'delivery_address_screen.dart';
 
 class CartScreen extends StatefulWidget {
@@ -19,8 +19,6 @@ class CartScreen extends StatefulWidget {
 }
 
 class _CartScreenState extends State<CartScreen> {
-  bool _isLoading = false;
-
   @override
   void initState() {
     super.initState();
@@ -37,90 +35,66 @@ class _CartScreenState extends State<CartScreen> {
     if (mounted) setState(() {});
   }
 
-  // Flask API'ye sipariş gönderme fonksiyonu
-  Future<void> _sendOrder() async {
-    final cartItems = CartManager().items;
+  Future<void> _proceedToCheckout() async {
+    final cart = CartManager();
+    final cartItems = cart.items;
     if (cartItems.isEmpty) return;
-    if (AddressBook.instance.selectedAddress == null) {
+
+    final selectedAddress = AddressBook.instance.selectedAddress;
+    if (selectedAddress == null) {
       _showErrorSnackBar('Siparişi tamamlamak için teslimat adresi seçin.');
       return;
     }
 
     if (!SessionManager.instance.isAuthenticated) {
       _showErrorSnackBar('Siparişi tamamlamak için lütfen önce giriş yapın.');
-      return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const AuthScreen()),
+      );
+      if (!mounted || !SessionManager.instance.isAuthenticated) {
+        return;
+      }
     }
 
-    setState(() {
-      _isLoading = true;
-    });
+    final addressModel = AddressModel(
+      id: int.tryParse(selectedAddress.id),
+      title: selectedAddress.title,
+      fullAddress: selectedAddress.fullText,
+      city: selectedAddress.city.isNotEmpty
+          ? selectedAddress.city
+          : 'Gazimağusa',
+      district: selectedAddress.district.isNotEmpty
+          ? selectedAddress.district
+          : 'Gazimağusa',
+      latitude: selectedAddress.latitude,
+      longitude: selectedAddress.longitude,
+    );
 
-    final selectedAddress = AddressBook.instance.selectedAddress?.fullText;
-    final orderPayload = {
-      'items': cartItems
-          .map(
-            (item) => {'product_id': item.product.id, 'quantity': item.quantity},
-          )
-          .toList(),
-      if (selectedAddress != null && selectedAddress.isNotEmpty)
-        'shipping_address': selectedAddress,
-    };
-
-    try {
-      final response = await http
-          .post(
-            Uri.parse('${AppConstants.baseUrl}/api/orders'),
-            headers: SessionManager.instance.authHeaders(),
-            body: json.encode(orderPayload),
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 201) {
-        CartManager().clear();
-        if (!mounted) return;
-
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Sipariş alındı'),
-            content: const Text('Siparişiniz başarıyla oluşturuldu.'),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  Navigator.pop(context);
-                },
-                child: const Text('Tamam'),
-              ),
-            ],
+    final orderItems = cartItems
+        .map(
+          (item) => OrderItemModel(
+            productId: item.product.id,
+            title: item.product.title,
+            quantity: item.quantity,
+            price: item.product.price,
           ),
-        );
-      } else if (response.statusCode == 401) {
-        _showErrorSnackBar('Oturum süreniz doldu. Lütfen tekrar giriş yapın.');
-      } else {
-        String message = 'Sipariş oluşturulamadı.';
-        try {
-          final errorData = json.decode(response.body);
-          if (errorData is Map<String, dynamic> && errorData['error'] != null) {
-            message = errorData['error'].toString();
-          }
-        } on FormatException {
-          message = 'Sunucudan geçersiz bir yanıt alındı.';
-        }
-        throw Exception(message);
-      }
-    } on TimeoutException {
-      _showErrorSnackBar(
-        'Sipariş gönderilemedi. Sunucu yanıt vermedi, lütfen tekrar deneyin.',
-      );
-    } catch (e) {
-      _showErrorSnackBar('Sipariş gönderilemedi: ${_cleanErrorMessage(e)}');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
+        )
+        .toList();
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CheckoutScreen(
+          selectedAddress: addressModel,
+          cartItems: orderItems,
+          totalPrice: cart.totalPrice,
+        ),
+      ),
+    );
+
+    if (mounted) {
+      setState(() {});
     }
   }
 
@@ -135,13 +109,6 @@ class _CartScreenState extends State<CartScreen> {
           behavior: SnackBarBehavior.floating,
         ),
       );
-  }
-
-  String _cleanErrorMessage(Object error) {
-    final message = error.toString();
-    return message.startsWith('Exception: ')
-        ? message.substring('Exception: '.length)
-        : message;
   }
 
   @override
@@ -198,7 +165,7 @@ class _CartScreenState extends State<CartScreen> {
                       Text(
                         strings.emptyCartTitle,
                         textAlign: TextAlign.center,
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.bold,
                           color: AppConstants.textPrimary,
@@ -208,7 +175,7 @@ class _CartScreenState extends State<CartScreen> {
                       Text(
                         strings.emptyCartDescription,
                         textAlign: TextAlign.center,
-                        style: TextStyle(
+                        style: const TextStyle(
                           color: AppConstants.textSecondary,
                           height: 1.5,
                         ),
@@ -304,7 +271,7 @@ class _CartScreenState extends State<CartScreen> {
                                       children: [
                                         _QuantityButton(
                                           icon: Icons.remove,
-                                          tooltip: 'Miktari azalt',
+                                          tooltip: 'Miktarı azalt',
                                           onPressed: () {
                                             setState(() {
                                               cart.decreaseQuantity(
@@ -327,7 +294,7 @@ class _CartScreenState extends State<CartScreen> {
                                         ),
                                         _QuantityButton(
                                           icon: Icons.add,
-                                          tooltip: 'Miktari artir',
+                                          tooltip: 'Miktarı artır',
                                           onPressed:
                                               item.quantity >=
                                                   item.product.stock
@@ -348,7 +315,7 @@ class _CartScreenState extends State<CartScreen> {
                               IconButton(
                                 icon: const Icon(Icons.delete_outline),
                                 color: AppConstants.errorColor,
-                                tooltip: 'Urunu kaldir',
+                                tooltip: 'Ürünü kaldır',
                                 onPressed: () {
                                   setState(() {
                                     cart.removeItem(item.product.id);
@@ -382,7 +349,7 @@ class _CartScreenState extends State<CartScreen> {
                         children: [
                           Text(
                             strings.total,
-                            style: TextStyle(
+                            style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
                             ),
@@ -411,24 +378,14 @@ class _CartScreenState extends State<CartScreen> {
                               ),
                             ),
                           ),
-                          onPressed: _isLoading ? null : _sendOrder,
-                          child: _isLoading
-                              ? const SizedBox(
-                                  width: 22,
-                                  height: 22,
-                                  child: CircularProgressIndicator(
-                                    color: Colors.white,
-                                    strokeWidth: 2.5,
-                                    semanticsLabel: 'Sipariş gönderiliyor',
-                                  ),
-                                )
-                              : Text(
-                                  strings.completeOrder,
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
+                          onPressed: _proceedToCheckout,
+                          child: Text(
+                            strings.completeOrder,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ),
                       ),
                     ],
@@ -458,7 +415,7 @@ class _CartScreenState extends State<CartScreen> {
                 children: [
                   Text(
                     strings.delivery,
-                    style: TextStyle(fontWeight: FontWeight.bold),
+                    style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                   TextButton.icon(
                     onPressed: _addNewAddress,
@@ -470,36 +427,82 @@ class _CartScreenState extends State<CartScreen> {
               if (addressBook.addresses.isEmpty)
                 Text(
                   strings.selectAddress,
-                  style: TextStyle(color: AppConstants.textSecondary),
+                  style: const TextStyle(color: AppConstants.textSecondary),
                 )
               else
-                DropdownButtonFormField<String>(
-                  initialValue: selectedAddress?.id,
-                  decoration: const InputDecoration(
-                    prefixIcon: Icon(Icons.location_on_outlined),
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  items: addressBook.addresses
-                      .map(
-                        (address) => DropdownMenuItem<String>(
-                          value: address.id,
-                          child: Text(
-                            '${address.title} - ${address.fullText}',
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        key: ValueKey(selectedAddress?.id),
+                        initialValue: selectedAddress?.id,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          prefixIcon: Icon(Icons.location_on_outlined),
+                          border: OutlineInputBorder(),
+                          isDense: true,
                         ),
-                      )
-                      .toList(),
-                  onChanged: (id) {
-                    if (id != null) addressBook.select(id);
-                  },
+                        items: addressBook.addresses
+                            .map(
+                              (address) => DropdownMenuItem<String>(
+                                value: address.id,
+                                child: Text(
+                                  '${address.title} - ${address.fullText}',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (id) {
+                          if (id != null) addressBook.select(id);
+                        },
+                      ),
+                    ),
+                    if (selectedAddress != null) ...[
+                      const SizedBox(width: 6),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        color: AppConstants.errorColor,
+                        tooltip: 'Seçili adresi sil',
+                        onPressed: () => _confirmDeleteAddress(selectedAddress),
+                      ),
+                    ],
+                  ],
                 ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  Future<void> _confirmDeleteAddress(Address address) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Adresi Sil'),
+        content: Text(
+          '"${address.title}" başlıklı kayıtlı adresi silmek istediğinize emin misiniz?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('İptal'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppConstants.errorColor,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Sil'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      await AddressBook.instance.deleteAddress(context, address.id);
+    }
   }
 
   Future<void> _addNewAddress() async {

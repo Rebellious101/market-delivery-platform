@@ -6,8 +6,10 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:http/http.dart' as http;
 
 import 'core/constants.dart';
+import 'core/local_storage.dart';
 import 'core/localization.dart';
 import 'screen/auth_screen.dart';
+import 'models/campaign_model.dart';
 import 'models/category_model.dart';
 import 'models/product_model.dart';
 import 'screen/product_detail_screen.dart';
@@ -18,7 +20,12 @@ import 'screen/address_book.dart';
 import 'core/session_manager.dart';
 import 'screen/order_history_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await LocalStorage.instance.init();
+  SessionManager.instance.restoreSession();
+  CartManager().restoreCart();
+  AddressBook.instance.restoreAddresses();
   runApp(const MarketApp());
 }
 
@@ -67,6 +74,7 @@ class _AuthGateState extends State<AuthGate> {
   void _logoutToGuest() {
     setState(() => _isGuest = true);
     SessionManager.instance.clearSession();
+    AddressBook.instance.clear();
   }
 
   @override
@@ -95,22 +103,30 @@ class MarketHomePage extends StatefulWidget {
 class _MarketHomePageState extends State<MarketHomePage> {
   late Future<List<Product>> _productsFuture;
   Future<List<Category>> _categoriesFuture = Future.value(const []);
+  late Future<List<Campaign>> _campaignsFuture;
   bool _hasLoadedCategories = false;
   int? _selectedCategoryId;
   int _selectedTab = 0;
   String _searchQuery = '';
-  Address? _deliveryAddress;
   Timer? _searchDebounce;
+
+  void _onAddressBookChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void initState() {
     super.initState();
     _productsFuture = _fetchProducts();
+    _campaignsFuture = _fetchCampaigns();
+    unawaited(AddressBook.instance.fetchUserAddresses());
+    AddressBook.instance.addListener(_onAddressBookChanged);
   }
 
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    AddressBook.instance.removeListener(_onAddressBookChanged);
     super.dispose();
   }
 
@@ -129,6 +145,9 @@ class _MarketHomePageState extends State<MarketHomePage> {
         List<Product> products = body
             .map((dynamic item) => Product.fromJson(item))
             .toList();
+        if (categoryId == null) {
+          CartManager().syncWithProducts(products);
+        }
         return products;
       }
 
@@ -155,6 +174,29 @@ class _MarketHomePageState extends State<MarketHomePage> {
         .toList();
   }
 
+  Future<List<Campaign>> _fetchCampaigns() async {
+    try {
+      final response = await http
+          .get(Uri.parse('${AppConstants.baseUrl}/api/campaigns'))
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode != 200) {
+        return const <Campaign>[];
+      }
+
+      final body = json.decode(response.body);
+      if (body is List) {
+        return body
+            .whereType<Map<String, dynamic>>()
+            .map(Campaign.fromJson)
+            .toList();
+      }
+      return const <Campaign>[];
+    } catch (_) {
+      return const <Campaign>[];
+    }
+  }
+
   void _selectCategory(int? categoryId) {
     setState(() {
       _selectedCategoryId = categoryId;
@@ -176,44 +218,53 @@ class _MarketHomePageState extends State<MarketHomePage> {
         title: InkWell(
           onTap: _editDeliveryAddress,
           borderRadius: BorderRadius.circular(10),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.5)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.location_on, size: 20),
-                const SizedBox(width: 7),
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      strings.deliveryAddress,
-                      style: TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: .5,
-                      ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 230),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.5)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.location_on, size: 20),
+                  const SizedBox(width: 7),
+                  Flexible(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          strings.deliveryAddress,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: .5,
+                          ),
+                        ),
+                        Text(
+                          AddressBook.instance.selectedAddress != null
+                              ? '${AddressBook.instance.selectedAddress!.title} - ${AddressBook.instance.selectedAddress!.fullText}'
+                              : strings.addAddress,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
                     ),
-                    Text(
-                      _deliveryAddress?.fullText ?? strings.addAddress,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 5),
-                const Icon(Icons.keyboard_arrow_down, size: 18),
-              ],
+                  ),
+                  const SizedBox(width: 5),
+                  const Icon(Icons.keyboard_arrow_down, size: 18),
+                ],
+              ),
             ),
           ),
         ),
@@ -254,6 +305,7 @@ class _MarketHomePageState extends State<MarketHomePage> {
                         widget.onLogout!();
                       } else {
                         SessionManager.instance.clearSession();
+                        AddressBook.instance.clear();
                       }
                     }
                   },
@@ -324,7 +376,7 @@ class _MarketHomePageState extends State<MarketHomePage> {
             Navigator.push(
               context,
               MaterialPageRoute(builder: (context) => const CartScreen()),
-            ).then((_) => setState(() {}));
+            ).then((_) => _retryLoadingProducts());
             return;
           }
           setState(() {
@@ -332,18 +384,20 @@ class _MarketHomePageState extends State<MarketHomePage> {
             if (index == 1 && !_hasLoadedCategories) {
               _hasLoadedCategories = true;
               _categoriesFuture = _fetchCategories();
+            } else if (index == 3) {
+              _campaignsFuture = _fetchCampaigns();
             }
           });
         },
         destinations: [
           NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
+            icon: const Icon(Icons.home_outlined),
+            selectedIcon: const Icon(Icons.home),
             label: strings.home,
           ),
           NavigationDestination(
-            icon: Icon(Icons.category_outlined),
-            selectedIcon: Icon(Icons.category),
+            icon: const Icon(Icons.category_outlined),
+            selectedIcon: const Icon(Icons.category),
             label: strings.categories,
           ),
           NavigationDestination(
@@ -352,8 +406,8 @@ class _MarketHomePageState extends State<MarketHomePage> {
             label: strings.cart,
           ),
           NavigationDestination(
-            icon: Icon(Icons.local_offer_outlined),
-            selectedIcon: Icon(Icons.local_offer),
+            icon: const Icon(Icons.local_offer_outlined),
+            selectedIcon: const Icon(Icons.local_offer),
             label: strings.campaigns,
           ),
         ],
@@ -365,14 +419,12 @@ class _MarketHomePageState extends State<MarketHomePage> {
     final address = await Navigator.push<Address>(
       context,
       MaterialPageRoute(
-        builder: (context) =>
-            DeliveryAddressScreen(initialAddress: _deliveryAddress),
+        builder: (context) => DeliveryAddressScreen(
+          initialAddress: AddressBook.instance.selectedAddress,
+        ),
       ),
     );
     if (address != null && mounted) {
-      setState(() {
-        _deliveryAddress = address;
-      });
       AddressBook.instance.add(address);
     }
   }
@@ -607,29 +659,109 @@ class _MarketHomePageState extends State<MarketHomePage> {
   }
 
   Widget _buildPromoBanner(AppStrings strings) {
-    return InkWell(
-      onTap: () => setState(() => _selectedTab = 3),
-      borderRadius: BorderRadius.circular(AppConstants.defaultRadius),
-      child: Container(
-        width: double.infinity,
-        constraints: const BoxConstraints(minHeight: 132),
-        padding: const EdgeInsets.fromLTRB(20, 18, 16, 18),
-        decoration: BoxDecoration(
-          color: AppConstants.primaryColor,
+    return FutureBuilder<List<Campaign>>(
+      future: _campaignsFuture,
+      builder: (context, snapshot) {
+        final latestCampaign = (snapshot.hasData && snapshot.data!.isNotEmpty)
+            ? snapshot.data!.first
+            : null;
+
+        final bannerTitle = latestCampaign != null
+            ? latestCampaign.title
+            : (strings.isEnglish
+                  ? 'Fast & Fresh Delivery'
+                  : 'Hızlı & Taze Teslimat');
+        final bannerDesc =
+            (latestCampaign != null && latestCampaign.description.isNotEmpty)
+            ? latestCampaign.description
+            : strings.campaignsDescription;
+
+        return InkWell(
+          onTap: () {
+            setState(() {
+              _selectedTab = 3;
+              _campaignsFuture = _fetchCampaigns();
+            });
+          },
           borderRadius: BorderRadius.circular(AppConstants.defaultRadius),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [const SizedBox(height: 6)],
-              ),
+          child: Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(minHeight: 132),
+            padding: const EdgeInsets.fromLTRB(20, 18, 16, 18),
+            decoration: BoxDecoration(
+              color: AppConstants.primaryColor,
+              borderRadius: BorderRadius.circular(AppConstants.defaultRadius),
             ),
-          ],
-        ),
-      ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (latestCampaign != null &&
+                          latestCampaign.badgeText.isNotEmpty) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.22),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            latestCampaign.badgeText,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                      ],
+                      Text(
+                        bannerTitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        bannerDesc,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.9),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.local_offer,
+                    color: Colors.white,
+                    size: 32,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -688,28 +820,199 @@ class _MarketHomePageState extends State<MarketHomePage> {
 
   Widget _buildCampaignsPage() {
     final strings = AppStrings.of(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.local_offer_outlined,
-              size: 64,
-              color: AppConstants.secondaryColor,
+    return FutureBuilder<List<Campaign>>(
+      future: _campaignsFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.cloud_off,
+                    size: 48,
+                    color: AppConstants.textSecondary,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Kampanyalar yüklenemedi.\n${snapshot.error.toString().replaceFirst('Exception: ', '')}',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _campaignsFuture = _fetchCampaigns();
+                      });
+                    },
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Tekrar dene'),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 16),
-            Text(
-              strings.campaignsSoon,
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              textAlign: TextAlign.center,
+          );
+        }
+
+        final campaigns = snapshot.data ?? <Campaign>[];
+        if (campaigns.isEmpty) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.local_offer_outlined,
+                    size: 64,
+                    color: AppConstants.secondaryColor,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    strings.campaignsSoon,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    strings.campaignsDescription,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _campaignsFuture = _fetchCampaigns();
+                      });
+                    },
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Yenile'),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
-            Text(strings.campaignsDescription, textAlign: TextAlign.center),
-          ],
-        ),
-      ),
+          );
+        }
+
+        return RefreshIndicator(
+          onRefresh: () async {
+            final future = _fetchCampaigns();
+            setState(() {
+              _campaignsFuture = future;
+            });
+            await future;
+          },
+          child: ListView.separated(
+            padding: const EdgeInsets.all(AppConstants.defaultPadding),
+            itemCount: campaigns.length,
+            separatorBuilder: (_, index) => const SizedBox(height: 14),
+            itemBuilder: (context, index) {
+              final campaign = campaigns[index];
+              return Card(
+                clipBehavior: Clip.antiAlias,
+                elevation: 2,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(
+                    AppConstants.defaultRadius,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (campaign.imageUrl != null)
+                      SizedBox(
+                        width: double.infinity,
+                        height: 160,
+                        child: Image.network(
+                          campaign.imageUrl!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) =>
+                              Container(
+                                color: AppConstants.primaryColor.withValues(
+                                  alpha: 0.1,
+                                ),
+                                alignment: Alignment.center,
+                                child: const Icon(
+                                  Icons.local_offer,
+                                  size: 48,
+                                  color: AppConstants.primaryColor,
+                                ),
+                              ),
+                        ),
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.local_offer,
+                                size: 20,
+                                color: AppConstants.primaryColor,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  campaign.title,
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                              if (campaign.badgeText.isNotEmpty)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: AppConstants.secondaryColor
+                                        .withValues(alpha: 0.16),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    campaign.badgeText,
+                                    style: const TextStyle(
+                                      color: AppConstants.secondaryColor,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          if (campaign.description.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              campaign.description,
+                              style: const TextStyle(
+                                color: AppConstants.textSecondary,
+                                height: 1.4,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 }

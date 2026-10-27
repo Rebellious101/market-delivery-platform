@@ -43,11 +43,12 @@ class AppStrings {
   String get noSearchResults => isEnglish
       ? 'No products match your search.'
       : 'Aramanızla eşleşen ürün bulunamadı.';
-  String get campaignsSoon =>
-      isEnglish ? 'Campaigns are coming soon' : 'Kampanyalar yakında burada';
+  String get campaignsSoon => isEnglish
+      ? 'No active campaigns found'
+      : 'Henüz aktif bir kampanya bulunmuyor';
   String get campaignsDescription => isEnglish
       ? 'Follow special offers and discounts here.'
-      : 'Avantajlı fırsatları ve özel indirimleri bu alandan takip edebileceksiniz.';
+      : 'Yeni fırsatlar ve özel indirimler eklendiğinde buradan takip edebilirsiniz.';
   String get language => isEnglish ? 'Language' : 'Dil';
   String get turkish => 'Türkçe';
   String get english => 'English';

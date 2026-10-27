@@ -20,15 +20,20 @@ class Product {
   });
 
   factory Product.fromJson(Map<String, dynamic> json) {
+    final storedImageUrl = json['image_url']?.toString() ?? '';
+    final imageField = json['image']?.toString() ?? '';
+    final resolvedImageUrl = storedImageUrl.isNotEmpty
+        ? storedImageUrl
+        : (imageField.isNotEmpty
+              ? '${AppConstants.baseUrl}/static/uploads/$imageField'
+              : 'https://picsum.photos/200');
+
     return Product(
       id: (json['id'] as num?)?.toInt() ?? 0,
-      title: json['name']?.toString() ?? '',
+      title: json['name']?.toString() ?? json['title']?.toString() ?? '',
       description: json['description']?.toString() ?? '',
       price: double.tryParse(json['price']?.toString() ?? '') ?? 0.0,
-      // Flask'ta resim adı tutulduğu için tam URL'yi veya yerel yolu ayarlıyoruz:
-      imageUrl: json['image'] != null && json['image'].toString().isNotEmpty
-          ? '${AppConstants.baseUrl}/static/uploads/${json['image']}'
-          : 'https://picsum.photos/200',
+      imageUrl: resolvedImageUrl,
       stock: (json['stock'] as num?)?.toInt() ?? 0,
       variants:
           (json['variants'] as List<dynamic>?)
@@ -38,4 +43,14 @@ class Product {
           const ['Standart'],
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': title,
+    'description': description,
+    'price': price,
+    'image_url': imageUrl,
+    'stock': stock,
+    'variants': variants,
+  };
 }

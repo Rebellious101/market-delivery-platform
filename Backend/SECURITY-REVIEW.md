@@ -16,6 +16,16 @@
 2. For deployment, do not run `app.py` directly: its development entry point enables debug mode and binds to all interfaces (`app.py:1133`). Use a production WSGI server, disable debug mode, serve over HTTPS, and enable secure session cookies.
 3. Keep `.env` out of source control and deployment artifacts.
 
+## Remediation status
+
+`app.py` now requires `FLASK_SECRET_KEY` and `JWT_SECRET_KEY` to be set to values of at least 32 characters, and requires explicit admin credentials with an admin password of at least 12 characters. It no longer supplies fallback keys or default admin credentials, so startup fails when these requirements are not met.
+
+Database connection settings (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME`) are also required explicitly; `DB_PORT` must be between 1 and 65535. The previous development defaults are no longer used.
+
+The duplicate `POST /api/orders` handler was removed so only the transactional order-creation endpoint remains. It loads product prices from the database and calculates the total with `Decimal`; it does not trust a client-supplied total. Product IDs and quantities are strict positive integers, repeated product IDs are combined, and sorted `SELECT ... FOR UPDATE` plus conditional stock updates keep all stock/order changes within one transaction. The endpoint accepts both `shipping_address` and the Flutter checkout's `full_address` field. JWT creation and validation use PyJWT consistently, without registering Flask-JWT-Extended. The `user_addresses` table is now created by the normal schema initialization, and address handlers consistently read the authenticated user's `user_id` from the JWT request context.
+
+Update the local `Backend/.env` and deployment secrets with independently generated signing keys and a new strong admin password before starting the application. Minimum length alone does not make a secret unpredictable; rotate any keys or passwords that may have been exposed.
+
 ## Existing protections observed
 
 - Database queries generally use parameterized values.

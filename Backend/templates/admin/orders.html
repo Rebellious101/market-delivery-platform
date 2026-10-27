@@ -16,6 +16,7 @@
         <a href="{{ url_for('admin_dashboard') }}">Dashboard</a>
         <a href="{{ url_for('admin_products') }}">Ürünler</a>
         <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
+        <a href="{{ url_for('admin_campaigns') }}">Kampanyalar</a>
         <a href="{{ url_for('admin_logout') }}">Çıkış</a>
     </nav>
 </header>
@@ -57,10 +58,11 @@
                 </div>
             </div>
 
-            <!-- 2. MÜŞTERİ VE ADRES BİLGİSİ -->
+            <!-- 2. MÜŞTERİ, ADRES VE ÖDEME BİLGİSİ -->
             <div class="order-customer-info">
                 <p><strong>Müşteri:</strong> {{ order.user_name or 'Belirtilmedi' }} ({{ order.user_email or 'E-posta yok' }})</p>
                 <p><strong>Adres:</strong> {{ order.shipping_address or 'Adres girilmedi' }}</p>
+                <p><strong>Ödeme Yöntemi:</strong> {{ order.payment_method or 'Nakit' }}</p>
             </div>
 
             <!-- 3. SİPARİŞ EDİLEN ÜRÜNLER -->
