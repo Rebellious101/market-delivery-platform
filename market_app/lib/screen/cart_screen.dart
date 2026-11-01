@@ -344,6 +344,24 @@ class _CartScreenState extends State<CartScreen> {
                   ),
                   child: Column(
                     children: [
+                      _buildDeliveryProgress(strings, cart.totalPrice),
+                      const SizedBox(height: 12),
+                      _buildPriceRow(
+                        strings.subtotal,
+                        '${cart.totalPrice.toStringAsFixed(2)} TL',
+                      ),
+                      const SizedBox(height: 6),
+                      _buildPriceRow(
+                        strings.deliveryFeeLabel,
+                        AppConstants.deliveryFeeFor(cart.totalPrice) == 0
+                            ? strings.free
+                            : '${AppConstants.deliveryFeeFor(cart.totalPrice).toStringAsFixed(2)} TL',
+                        valueColor:
+                            AppConstants.deliveryFeeFor(cart.totalPrice) == 0
+                            ? AppConstants.primaryColor
+                            : null,
+                      ),
+                      const Divider(height: 20),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -355,7 +373,7 @@ class _CartScreenState extends State<CartScreen> {
                             ),
                           ),
                           Text(
-                            '${cart.totalPrice.toStringAsFixed(2)} TL',
+                            '${(cart.totalPrice + AppConstants.deliveryFeeFor(cart.totalPrice)).toStringAsFixed(2)} TL',
                             style: const TextStyle(
                               fontSize: 20,
                               fontWeight: FontWeight.bold,
@@ -393,6 +411,72 @@ class _CartScreenState extends State<CartScreen> {
                 ),
               ],
             ),
+    );
+  }
+
+  Widget _buildPriceRow(String label, String value, {Color? valueColor}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(color: AppConstants.textSecondary),
+        ),
+        Text(
+          value,
+          style: TextStyle(fontWeight: FontWeight.w600, color: valueColor),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDeliveryProgress(AppStrings strings, double subtotal) {
+    final threshold = AppConstants.freeDeliveryThreshold;
+    final remaining = threshold - subtotal;
+    final unlocked = remaining <= 0;
+    final progress = (subtotal / threshold).clamp(0.0, 1.0);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              unlocked ? Icons.check_circle : Icons.local_shipping_outlined,
+              size: 18,
+              color: unlocked
+                  ? AppConstants.primaryColor
+                  : AppConstants.secondaryColor,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                unlocked
+                    ? strings.freeDeliveryUnlocked
+                    : strings.freeDeliveryRemaining(
+                        remaining.toStringAsFixed(2),
+                      ),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: progress,
+            minHeight: 6,
+            backgroundColor: Colors.grey.shade200,
+            color: unlocked
+                ? AppConstants.primaryColor
+                : AppConstants.secondaryColor,
+          ),
+        ),
+      ],
     );
   }
 

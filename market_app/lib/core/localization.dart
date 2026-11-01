@@ -68,6 +68,23 @@ class AppStrings {
       : 'Sipariş vermek için bir teslimat adresi ekleyin.';
   String get completeOrder => isEnglish ? 'Complete order' : 'Siparişi Tamamla';
   String get total => isEnglish ? 'Total:' : 'Toplam Tutar:';
+  String get subtotal => isEnglish ? 'Subtotal:' : 'Ara Toplam:';
+  String get deliveryFeeLabel => isEnglish ? 'Delivery fee:' : 'Gönderim Ücreti:';
+  String get free => isEnglish ? 'Free' : 'Ücretsiz';
+  String freeDeliveryRemaining(String amount) => isEnglish
+      ? 'Add $amount TL more for free delivery!'
+      : 'Ücretsiz gönderim için $amount TL daha ekleyin!';
+  String get freeDeliveryUnlocked => isEnglish
+      ? 'Free delivery unlocked!'
+      : 'Tebrikler, gönderim ücretsiz!';
+  String get deliveryInfoTitle =>
+      isEnglish ? 'Delivery Information' : 'Gönderim Bilgilendirmesi';
+  String deliveryInfoBody(String threshold, String fee) => isEnglish
+      ? 'Delivery is free for orders of $threshold TL and above.\n\n'
+            'A delivery fee of $fee TL is added to orders below $threshold TL.'
+      : '$threshold TL ve üzeri siparişlerde gönderim ücretsizdir.\n\n'
+            '$threshold TL altındaki siparişlere $fee TL gönderim ücreti eklenir.';
+  String get gotIt => isEnglish ? 'Got it' : 'Anladım';
   String get orderReceived => isEnglish ? 'Order received' : 'Sipariş alındı';
   String get orderCreated => isEnglish
       ? 'Your order was created successfully.'
@@ -82,4 +99,25 @@ class AppStrings {
       isEnglish ? 'Product description' : 'Ürün Açıklaması';
   String get selectVariant => isEnglish ? 'Select a variant' : 'Varyant seçin';
   String get addToCart => isEnglish ? 'Add to cart' : 'Sepete Ekle';
+  String get profile => isEnglish ? 'Profile' : 'Profil';
+  String get popularProducts =>
+      isEnglish ? 'Popular Products' : 'Popüler Ürünler';
+  String get viewAll => isEnglish ? 'View All >' : 'Tümünü Gör >';
+  String get selectLocation => isEnglish ? 'Select location' : 'Konum seçin';
+  String get searchHint =>
+      isEnglish ? 'Search products or categories...' : 'Ürün veya kategori ara...';
+  String get weeklyDeals => isEnglish ? 'Weekly Deals' : 'Haftanın Fırsatları';
+  String get freshDiscounts => isEnglish
+      ? 'Special discounts on fresh items!'
+      : 'Taze ürünlerde özel indirimler!';
+  String get exploreNow => isEnglish ? 'Explore now >' : 'Şimdi keşfet >';
+  String get upToDiscount => isEnglish ? 'Up to 50% off' : "%50'ye varan indirim";
+  String get myOrders => isEnglish ? 'Order History' : 'Sipariş Geçmişim';
+  String get savedAddresses =>
+      isEnglish ? 'Saved Addresses' : 'Kayıtlı Adreslerim';
+  String get logout => isEnglish ? 'Log Out' : 'Çıkış Yap';
+  String get login => isEnglish ? 'Log In' : 'Giriş Yap';
+  String get notifications => isEnglish ? 'Notifications' : 'Bildirimler';
+  String get noNotifications =>
+      isEnglish ? 'No notifications yet' : 'Henüz yeni bildiriminiz yok';
 }

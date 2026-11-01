@@ -6,9 +6,9 @@ class AppConstants {
   static const String appVersion = '1.0.0';
 
   // Tema Renkleri
-  static const Color primaryColor = Color(0xFF2E7D32); // Koyu Yeşil
+  static const Color primaryColor = Color(0xFF1B6A38); // Modern Market Yeşili
   static const Color secondaryColor = Color(0xFFFFA000); // Amber / Turuncu
-  static const Color backgroundColor = Color(0xFFF8F9FA);
+  static const Color backgroundColor = Color(0xFFF9FAF9);
   static const Color surfaceColor = Colors.white;
   static const Color errorColor = Color(0xFFD32F2F);
 
@@ -34,6 +34,18 @@ class AppConstants {
   static const String tokenKey = 'auth_token';
   static const String userKey = 'user_data';
   static const String cartKey = 'local_cart';
+  static const String deliveryInfoShownKey = 'delivery_info_popup_shown';
+
+  // Gönderim Ücreti Kuralları
+  // NOT: Sunucudaki (Backend/app.py) FREE_DELIVERY_THRESHOLD ve DELIVERY_FEE ile aynı olmalı.
+  static const double freeDeliveryThreshold = 1000.0;
+  static const double deliveryFee = 50.0;
+
+  /// Ara toplama göre gönderim ücretini hesaplar (eşik ve üzeri ücretsiz).
+  static double deliveryFeeFor(double subtotal) {
+    if (subtotal <= 0) return 0;
+    return subtotal >= freeDeliveryThreshold ? 0 : deliveryFee;
+  }
 
   // UI / Tasarım Sabitleri
   static const double defaultPadding = 16.0;

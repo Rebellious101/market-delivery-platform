@@ -161,6 +161,15 @@ class CartManager extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Toplam ürün adedi
+  int get totalQuantity {
+    int total = 0;
+    for (final item in _items) {
+      total += item.quantity;
+    }
+    return total;
+  }
+
   // Toplam tutarı hesaplama
   double get totalPrice {
     double total = 0;
