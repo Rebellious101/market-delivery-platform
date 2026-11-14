@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Haftanın İndirimleri | Market Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<header class="topbar">
+    <div>
+        <p class="eyebrow">MARKET ADMIN</p>
+        <h1>Haftanın İndirimleri</h1>
+    </div>
+    <nav class="nav-links">
+        <a href="{{ url_for('admin_dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('admin_products') }}">Ürünler</a>
+        <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
+        <a href="{{ url_for('admin_campaigns') }}">Kampanyalar</a>
+        <a href="{{ url_for('admin_orders') }}">Siparişler</a>
+        <a href="{{ url_for('admin_logout') }}">Çıkış</a>
+    </nav>
+</header>
+
+<main class="admin-shell">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+
+    <section class="page-intro">
+        <div>
+            <p class="eyebrow">MOBİL UYGULAMA</p>
+            <h2>Carousel ürünlerini yönet</h2>
+            <p class="muted">Burada seçtiğiniz yayındaki ürünler ana sayfadaki “Haftanın İndirimleri” yatay ürün carousel’inde görünür. Ürün fiyatı normal ürün fiyatından alınır.</p>
+        </div>
+        <div class="stat-pill">{{ weekly_products|length }} ürün seçili</div>
+    </section>
+
+    <section class="panel">
+        <div class="panel-heading">
+            <div>
+                <p class="eyebrow">CAROUSEL’E EKLE</p>
+                <h2>Ürün seç</h2>
+            </div>
+        </div>
+        {% if available_products %}
+        <form method="POST" action="{{ url_for('admin_add_weekly_deal') }}" class="product-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label class="full-width">
+                Yayındaki ürünler
+                <select name="product_id" required>
+                    <option value="">Ürün seçin</option>
+                    {% for product in available_products %}
+                    <option value="{{ product.id }}">{{ product.name }} — {{ '%.2f'|format(product.price) }} TL ({{ product.stock }} stok)</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <div class="form-actions full-width">
+                <button class="button button-primary" type="submit">Carousele ekle</button>
+            </div>
+        </form>
+        {% else %}
+        <p class="muted">Eklenecek başka yayındaki ürün yok.</p>
+        {% endif %}
+    </section>
+
+    <section class="panel">
+        <div class="panel-heading">
+            <div>
+                <p class="eyebrow">ANA SAYFA CAROUSEL’İ</p>
+                <h2>Seçili ürünler</h2>
+            </div>
+        </div>
+        <div class="product-table-wrap">
+            <table class="product-table">
+                <thead>
+                    <tr>
+                        <th>Ürün</th>
+                        <th>Kategori</th>
+                        <th>Fiyat</th>
+                        <th>Stok</th>
+                        <th>Durum</th>
+                        <th>İşlem</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for product in weekly_products %}
+                    <tr>
+                        <td class="product-cell">
+                            {% if product.image %}
+                                <img src="{{ url_for('static', filename='uploads/' ~ product.image) }}" alt="{{ product.name }}">
+                            {% else %}
+                                <div class="image-placeholder">IMG</div>
+                            {% endif %}
+                            <div>
+                                <strong>{{ product.name }}</strong>
+                                <small>#{{ product.id }}</small>
+                            </div>
+                        </td>
+                        <td>{{ product.category or 'Kategorisiz' }}</td>
+                        <td>{{ '%.2f'|format(product.price) }} TL</td>
+                        <td>{{ product.stock }}</td>
+                        <td>
+                            <span class="badge {% if product.active %}badge-success{% else %}badge-muted{% endif %}">
+                                {% if product.active %}Yayında{% else %}Pasif{% endif %}
+                            </span>
+                        </td>
+                        <td class="actions-cell">
+                            <form method="POST" action="{{ url_for('admin_remove_weekly_deal', product_id=product.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button class="table-action" type="submit" style="background: #fbe6e4; color: #9b3029;">Carouselden çıkar</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="empty-cell">Haftanın indirimlerine henüz ürün eklenmemiş.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</body>
+</html>

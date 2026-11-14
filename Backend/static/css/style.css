@@ -193,6 +193,27 @@ h1 {
     font-weight: 700;
 }
 
+.product-form .checkbox-field span {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+}
+
+.product-form .checkbox-field input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    accent-color: #28704a;
+}
+
+.product-form .checkbox-field small {
+    color: #718079;
+    font-weight: 400;
+}
+
 .product-form input,
 .product-form select,
 .product-form textarea {
@@ -1038,6 +1059,46 @@ h1 {
 .customer-email {
     color: #718079;
     font-size: 12px;
+}
+
+.customer-phone-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: #e8f5e9;
+    border: 1px solid #c8e6c9;
+    color: #1b5e20;
+    font-size: 12px;
+    font-weight: 700;
+    text-decoration: none;
+    transition: all 0.15s ease;
+}
+
+.customer-phone-badge:hover {
+    background: #c8e6c9;
+    color: #0b3d11;
+}
+
+.whatsapp-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: #25d366;
+    border: 1px solid #1ebd5a;
+    color: #fff;
+    font-size: 11.5px;
+    font-weight: 700;
+    text-decoration: none;
+    transition: background 0.15s ease;
+}
+
+.whatsapp-btn:hover {
+    background: #1ebd5a;
+    color: #fff;
 }
 
 .address-row {

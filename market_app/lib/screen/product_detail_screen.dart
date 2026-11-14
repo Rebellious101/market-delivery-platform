@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/constants.dart';
+import '../core/local_storage.dart';
 import '../core/localization.dart';
 import '../models/product_model.dart';
 import 'cart_manager.dart';
@@ -16,6 +17,7 @@ class ProductDetailScreen extends StatefulWidget {
 
 class _ProductDetailScreenState extends State<ProductDetailScreen> {
   late String _selectedVariant;
+  bool _isFavorite = false;
 
   Product get product => widget.product;
 
@@ -23,6 +25,32 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   void initState() {
     super.initState();
     _selectedVariant = product.variants.first;
+    _checkFavorite();
+  }
+
+  void _checkFavorite() {
+    try {
+      final raw = LocalStorage.instance.read('favorite_product_ids');
+      if (raw is List) {
+        _isFavorite = raw.map((e) => int.tryParse(e.toString()) ?? 0).contains(product.id);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _toggleFavorite() async {
+    setState(() => _isFavorite = !_isFavorite);
+    try {
+      final raw = LocalStorage.instance.read('favorite_product_ids');
+      final list = (raw is List)
+          ? raw.map((e) => int.tryParse(e.toString()) ?? 0).where((id) => id > 0).toSet()
+          : <int>{};
+      if (_isFavorite) {
+        list.add(product.id);
+      } else {
+        list.remove(product.id);
+      }
+      await LocalStorage.instance.write('favorite_product_ids', list.toList());
+    } catch (_) {}
   }
 
   @override
@@ -33,6 +61,15 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         title: Text(product.title),
         backgroundColor: AppConstants.primaryColor,
         foregroundColor: AppConstants.textLight,
+        actions: [
+          IconButton(
+            icon: Icon(
+              _isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+              color: _isFavorite ? Colors.redAccent : Colors.white,
+            ),
+            onPressed: _toggleFavorite,
+          ),
+        ],
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

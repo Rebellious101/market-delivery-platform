@@ -122,12 +122,22 @@
                                 {% else %}🛵 Kuryede{% endif %}
                             </span>
                         </div>
-                        <p class="order-timestamp">🕒 {{ order.created_at_formatted }} • <strong>👤 {{ order.user_name }}</strong></p>
+                        <p class="order-timestamp">
+                            🕒 {{ order.created_at_formatted }} • <strong>👤 {{ order.user_name }}</strong>
+                            {% if order.user_phone and order.user_phone != '-' %}
+                            • <a href="tel:{{ order.user_phone }}" style="display: inline-flex; align-items: center; gap: 3px; color: #1b5e20; background: #e8f5e9; padding: 2px 7px; border-radius: 4px; font-weight: 700; text-decoration: none;">📞 {{ order.user_phone }}</a>
+                            {% endif %}
+                        </p>
                     </div>
 
                     <div class="order-total-box">
                         <span class="order-total-label">Tahsil Edilecek</span>
                         <strong class="order-total-amount">{{ '%.2f'|format(order.total_price) }} TL</strong>
+                        {% if order.delivery_fee and order.delivery_fee > 0 %}
+                        <small style="display: block; font-size: 11px; color: #555; margin-top: 1px;">
+                            (Ürünler: {{ '%.2f'|format(order.subtotal) }} + Kargo: {{ '%.2f'|format(order.delivery_fee) }} TL)
+                        </small>
+                        {% endif %}
                         <span class="payment-badge {% if 'Kart' in order.payment_method %}payment-card{% else %}payment-cash{% endif %}">
                             {% if 'Kart' in order.payment_method %}💳 {{ order.payment_method }}{% else %}💵 {{ order.payment_method }}{% endif %}
                         </span>
@@ -321,11 +331,16 @@
                             <span class="order-number-badge">#${order.order_id}</span>
                             <span class="order-status-pill ${statusClass}">${statusText}</span>
                         </div>
-                        <p class="order-timestamp">🕒 ${escapeHtml(order.created_at_formatted)} • <strong>👤 ${escapeHtml(order.user_name)}</strong></p>
+                        <p class="order-timestamp">🕒 ${escapeHtml(order.created_at_formatted)} • <strong>👤 ${escapeHtml(order.user_name)}</strong>${order.user_phone && order.user_phone !== '-' ? ` • <a href="tel:${escapeHtml(order.user_phone)}" style="display: inline-flex; align-items: center; gap: 3px; color: #1b5e20; background: #e8f5e9; padding: 2px 7px; border-radius: 4px; font-weight: 700; text-decoration: none;">📞 ${escapeHtml(order.user_phone)}</a>` : ''}</p>
                     </div>
                     <div class="order-total-box">
                         <span class="order-total-label">Tahsil Edilecek</span>
                         <strong class="order-total-amount">${Number(order.total_price).toFixed(2)} TL</strong>
+                        ${order.delivery_fee && order.delivery_fee > 0 ? `
+                        <small style="display: block; font-size: 11px; color: #555; margin-top: 1px;">
+                            (Ürünler: ${Number(order.subtotal).toFixed(2)} + Kargo: ${Number(order.delivery_fee).toFixed(2)} TL)
+                        </small>
+                        ` : ''}
                         <span class="payment-badge ${payClass}">${payIcon} ${escapeHtml(order.payment_method)}</span>
                     </div>
                 </div>

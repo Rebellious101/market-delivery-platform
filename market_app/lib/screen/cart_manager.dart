@@ -83,6 +83,8 @@ class CartManager extends ChangeNotifier {
           if (current.product.price != updatedProduct.price ||
               current.product.stock != updatedProduct.stock ||
               current.product.title != updatedProduct.title ||
+              current.product.minimumOrderExempt !=
+                  updatedProduct.minimumOrderExempt ||
               current.product.imageUrl != updatedProduct.imageUrl ||
               current.quantity != clampedQty) {
             current.product = updatedProduct;
@@ -175,6 +177,17 @@ class CartManager extends ChangeNotifier {
     double total = 0;
     for (final item in _items) {
       total += item.product.price * item.quantity;
+    }
+    return total;
+  }
+
+  /// Subtotal used to validate the minimum order amount, excluding exempt items.
+  double get minimumOrderTotal {
+    double total = 0;
+    for (final item in _items) {
+      if (!item.product.minimumOrderExempt) {
+        total += item.product.price * item.quantity;
+      }
     }
     return total;
   }

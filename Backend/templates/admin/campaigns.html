@@ -17,6 +17,7 @@
         <a href="{{ url_for('admin_products') }}">Ürünler</a>
         <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
         <a href="{{ url_for('admin_campaigns') }}">Kampanyalar</a>
+        <a href="{{ url_for('admin_weekly_deals') }}">Haftanın İndirimleri</a>
         <a href="{{ url_for('admin_orders') }}">Siparişler</a>
         <a href="{{ url_for('admin_logout') }}">Çıkış</a>
     </nav>
@@ -33,7 +34,7 @@
         <div>
             <p class="eyebrow">PAZARLAMA & FIRSATLAR</p>
             <h2>Mobil uygulama kampanyaları</h2>
-            <p class="muted">Buradan eklenen ve yayında olan kampanyalar mobil uygulamanın Kampanyalar sekmesinde ve ana ekran afişinde görünür.</p>
+            <p class="muted">Buradan eklenen ve yayında olan kampanyalar mobil uygulamanın Kampanyalar sekmesinde görünür. Ana sayfadaki ürün carousel’i Haftanın İndirimleri sayfasından yönetilir.</p>
         </div>
         <div class="stat-pill">{{ campaigns|length }} kampanya</div>
     </section>
@@ -134,4 +135,3 @@
 </main>
 </body>
 </html>
-

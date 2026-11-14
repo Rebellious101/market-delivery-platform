@@ -17,6 +17,7 @@
         <a href="{{ url_for('admin_products') }}">Ürünler</a>
         <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
         <a href="{{ url_for('admin_campaigns') }}">Kampanyalar</a>
+        <a href="{{ url_for('admin_weekly_deals') }}">Haftanın İndirimleri</a>
         <a href="{{ url_for('admin_orders') }}">Siparişler</a>
         <a href="{{ url_for('admin_logout') }}">Çıkış</a>
     </nav>
@@ -30,9 +31,29 @@
             <p class="muted">Katalog, stok, kampanya ve sipariş durumunu tek ekrandan takip et.</p>
         </div>
         <div style="display: flex; gap: 10px;">
+            <a class="button button-secondary" href="{{ url_for('admin_weekly_deals') }}">Haftanın indirimlerini yönet</a>
             <a class="button button-secondary" href="{{ url_for('admin_campaigns') }}">+ Kampanya ekle</a>
             <a class="button button-primary" href="{{ url_for('admin_products') }}">+ Ürün ekle</a>
         </div>
+    </section>
+    <section class="panel">
+        <div class="panel-heading">
+            <div>
+                <p class="eyebrow">SİPARİŞ KURALLARI</p>
+                <h2>Minimum sepet tutarı</h2>
+                <p class="muted">Sigara ve tütün ürünleri minimum tutar hesabına dahil edilmez.</p>
+            </div>
+        </div>
+        <form method="POST" action="{{ url_for('admin_update_minimum_order') }}" class="product-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label>
+                Minimum tutar (TL)
+                <input type="number" name="minimum_order_amount" min="0" max="99999999.99" step="0.01" value="{{ '%.2f'|format(minimum_order_amount) }}" required>
+            </label>
+            <div class="form-actions">
+                <button class="button button-primary" type="submit">Minimum tutarı kaydet</button>
+            </div>
+        </form>
     </section>
     <section class="metrics-grid">
         <div class="metric-card"><span>Aktif ürün</span><strong>{{ active_product_count }}</strong><small>{{ product_count }} toplam kayıt</small></div>
@@ -46,6 +67,7 @@
             <a class="quick-link" href="{{ url_for('admin_products') }}"><span>Ürün kataloğu</span><b>→</b></a>
             <a class="quick-link" href="{{ url_for('admin_categories') }}"><span>Kategori düzeni</span><b>→</b></a>
             <a class="quick-link" href="{{ url_for('admin_campaigns') }}"><span>Kampanyalar</span><b>→</b></a>
+            <a class="quick-link" href="{{ url_for('admin_weekly_deals') }}"><span>Haftanın İndirimleri</span><b>→</b></a>
             <a class="quick-link" href="{{ url_for('admin_orders') }}"><span>Sipariş takibi</span><b>→</b></a>
         </div>
         <div class="panel">

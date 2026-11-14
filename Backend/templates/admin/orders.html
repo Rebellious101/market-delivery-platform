@@ -17,6 +17,7 @@
         <a href="{{ url_for('admin_products') }}">Ürünler</a>
         <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
         <a href="{{ url_for('admin_campaigns') }}">Kampanyalar</a>
+        <a href="{{ url_for('admin_weekly_deals') }}">Haftanın İndirimleri</a>
         <a href="{{ url_for('admin_orders') }}" style="background: rgba(255,255,255,0.18); font-weight: 700;">Siparişler</a>
         <a href="{{ url_for('courier_dashboard') }}" style="background: #1565c0; border-color: #1565c0; font-weight: 700;">🛵 Kurye Ekranı</a>
         <a href="{{ url_for('admin_logout') }}">Çıkış</a>
@@ -117,6 +118,11 @@
                         <div class="order-total-box">
                             <span class="order-total-label">Toplam Tutar</span>
                             <strong class="order-total-amount">{{ '%.2f'|format(order.total_price) }} TL</strong>
+                            {% if order.delivery_fee and order.delivery_fee > 0 %}
+                            <small style="display: block; font-size: 11px; color: #555; margin-top: 1px;">
+                                (Ürünler: {{ '%.2f'|format(order.subtotal) }} + Kargo: {{ '%.2f'|format(order.delivery_fee) }} TL)
+                            </small>
+                            {% endif %}
                             <span class="payment-badge {% if 'Kart' in order.payment_method %}payment-card{% else %}payment-cash{% endif %}">
                                 {% if 'Kart' in order.payment_method %}💳 {{ order.payment_method }}{% else %}💵 {{ order.payment_method }}{% endif %}
                             </span>
@@ -145,9 +151,23 @@
                     <div class="order-customer-box">
                         <div class="customer-row">
                             <span class="info-icon">👤</span>
-                            <div>
-                                <strong>{{ order.user_name }}</strong>
-                                <small class="customer-email">{{ order.user_email }}</small>
+                            <div style="flex: 1;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                                    <strong>{{ order.user_name }}</strong>
+                                    {% if order.user_phone and order.user_phone != '-' %}
+                                    <div style="display: flex; align-items: center; gap: 6px;">
+                                        <a href="tel:{{ order.user_phone }}" class="customer-phone-badge" title="Telefonla Ara">
+                                            📞 {{ order.user_phone }}
+                                        </a>
+                                        <a href="https://wa.me/{{ order.user_phone|replace('+', '')|replace(' ', '')|replace('-', '') }}" target="_blank" rel="noopener" class="whatsapp-btn" title="WhatsApp Mesaj Gönder">
+                                            💬 WhatsApp
+                                        </a>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                                {% if order.user_email and order.user_email != '-' and '@' in order.user_email %}
+                                <small class="customer-email">✉️ {{ order.user_email }}</small>
+                                {% endif %}
                             </div>
                         </div>
                         <div class="customer-row address-row">
@@ -655,6 +675,11 @@
                     <div class="order-total-box">
                         <span class="order-total-label">Toplam Tutar</span>
                         <strong class="order-total-amount">${Number(order.total_price).toFixed(2)} TL</strong>
+                        ${order.delivery_fee && order.delivery_fee > 0 ? `
+                        <small style="display: block; font-size: 11px; color: #555; margin-top: 1px;">
+                            (Ürünler: ${Number(order.subtotal).toFixed(2)} + Kargo: ${Number(order.delivery_fee).toFixed(2)} TL)
+                        </small>
+                        ` : ''}
                         <span class="payment-badge ${paymentBadgeClass}">
                             ${paymentIcon} ${escapeHtml(order.payment_method)}
                         </span>
@@ -666,9 +691,23 @@
                 <div class="order-customer-box">
                     <div class="customer-row">
                         <span class="info-icon">👤</span>
-                        <div>
-                            <strong>${escapeHtml(order.user_name)}</strong>
-                            <small class="customer-email">${escapeHtml(order.user_email)}</small>
+                        <div style="flex: 1;">
+                            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                                <strong>${escapeHtml(order.user_name)}</strong>
+                                ${order.user_phone && order.user_phone !== '-' ? `
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <a href="tel:${escapeHtml(order.user_phone)}" class="customer-phone-badge" title="Telefonla Ara">
+                                        📞 ${escapeHtml(order.user_phone)}
+                                    </a>
+                                    <a href="https://wa.me/${escapeHtml(order.user_phone.replace(/[^0-9]/g, ''))}" target="_blank" rel="noopener" class="whatsapp-btn" title="WhatsApp Mesaj Gönder">
+                                        💬 WhatsApp
+                                    </a>
+                                </div>
+                                ` : ''}
+                            </div>
+                            ${order.user_email && order.user_email !== '-' && order.user_email.includes('@') ? `
+                            <small class="customer-email">✉️ ${escapeHtml(order.user_email)}</small>
+                            ` : ''}
                         </div>
                     </div>
                     <div class="customer-row address-row">

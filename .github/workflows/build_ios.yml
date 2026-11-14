@@ -41,3 +41,4 @@ jobs:
           name: PrestijMarket-iOS
           path: market_app/build/ios/iphoneos/PrestijMarket.ipa
           retention-days: 7
+

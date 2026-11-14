@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
+import 'constants.dart';
 import 'local_storage.dart';
 
 class SessionManager extends ChangeNotifier {
@@ -21,6 +23,7 @@ class SessionManager extends ChangeNotifier {
 
   String get userName => _user?['name']?.toString() ?? 'Kullanıcı';
   String get userEmail => _user?['email']?.toString() ?? '';
+  String get userPhone => _user?['phone']?.toString() ?? '';
   int? get userId => _user?['id'] is int ? _user!['id'] as int : null;
 
   void restoreSession() {
@@ -55,6 +58,8 @@ class SessionManager extends ChangeNotifier {
     return false;
   }
 
+  /// Oturum cihaza kalıcı olarak kaydedilir; kullanıcı "Çıkış Yap" diyene
+  /// kadar uygulama kapatılıp açılsa bile açık kalır.
   void setSession({required String token, required Map<String, dynamic> user}) {
     _token = token;
     _user = user;
@@ -62,6 +67,42 @@ class SessionManager extends ChangeNotifier {
       LocalStorage.instance.write(_storageKey, {'token': token, 'user': user}),
     );
     notifyListeners();
+  }
+
+  /// Uygulama açılışında token'ı sunucudan yeniler (süresini uzatır).
+  ///
+  /// Sadece sunucu token'ı açıkça reddederse (401) oturum kapatılır.
+  /// İnternet yoksa veya sunucuya ulaşılamazsa oturum olduğu gibi korunur.
+  Future<void> refreshToken() async {
+    if (!isAuthenticated) return;
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${AppConstants.baseUrl}/api/auth/refresh'),
+            headers: authHeaders(),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map) {
+          final newToken = data['token']?.toString() ?? '';
+          final newUser = data['user'];
+          if (newToken.isNotEmpty) {
+            setSession(
+              token: newToken,
+              user: newUser is Map
+                  ? Map<String, dynamic>.from(newUser)
+                  : (_user ?? {}),
+            );
+          }
+        }
+      } else if (response.statusCode == 401) {
+        clearSession();
+      }
+    } catch (_) {
+      // Ağ hatası: oturumu koru, bir sonraki açılışta tekrar denenir.
+    }
   }
 
   void clearSession() {

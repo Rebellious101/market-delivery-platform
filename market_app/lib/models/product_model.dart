@@ -7,6 +7,7 @@ class Product {
   final double price;
   final String imageUrl;
   final int stock;
+  final bool minimumOrderExempt;
   final List<String> variants;
 
   Product({
@@ -16,6 +17,7 @@ class Product {
     required this.price,
     required this.imageUrl,
     required this.stock,
+    this.minimumOrderExempt = false,
     this.variants = const ['Standart'],
   });
 
@@ -38,6 +40,9 @@ class Product {
       price: double.tryParse(json['price']?.toString() ?? '') ?? 0.0,
       imageUrl: resolvedImageUrl,
       stock: (json['stock'] as num?)?.toInt() ?? 0,
+      minimumOrderExempt:
+          json['minimum_order_exempt'] == true ||
+          json['minimum_order_exempt'] == 1,
       variants:
           (json['variants'] as List<dynamic>?)
               ?.map((variant) => variant.toString())
@@ -54,6 +59,7 @@ class Product {
     'price': price,
     'image_url': imageUrl,
     'stock': stock,
+    'minimum_order_exempt': minimumOrderExempt,
     'variants': variants,
   };
 }

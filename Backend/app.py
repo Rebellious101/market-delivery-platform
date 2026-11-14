@@ -1,13 +1,19 @@
 import datetime
+from email.message import EmailMessage
+import json
 import logging
 import os
 import secrets
 import shutil
+import smtplib
+import ssl
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from contextlib import contextmanager
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from functools import wraps
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
@@ -73,6 +79,25 @@ app.config["JWT_SECRET_KEY"] = require_environment_variable("JWT_SECRET_KEY", mi
 JWT_SECRET_KEY = app.config["JWT_SECRET_KEY"]
 ADMIN_USERNAME = require_environment_variable("ADMIN_USERNAME")
 ADMIN_PASSWORD = require_environment_variable("ADMIN_PASSWORD", minimum_length=12)
+
+# Google / telefon ile giriş (Firebase) – isteğe bağlı. Boşsa bu giriş yöntemleri kapalıdır.
+FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID", "").strip()
+FIREBASE_WEB_API_KEY = os.getenv("FIREBASE_WEB_API_KEY", "").strip()
+DEFAULT_MINIMUM_ORDER_AMOUNT = Decimal("450.00")
+MINIMUM_ORDER_SETTING_KEY = "minimum_order_amount"
+FREE_DELIVERY_THRESHOLD = Decimal("1000.00")
+DELIVERY_FEE = Decimal("50.00")
+
+# "Şifremi unuttum" e-postaları için SMTP – isteğe bağlı. Boşsa e-posta ile sıfırlama kapalıdır.
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587") or 587)
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM = os.getenv("SMTP_FROM", "").strip() or SMTP_USER
+
+PASSWORD_RESET_CODE_MINUTES = 15
+PASSWORD_RESET_MAX_ATTEMPTS = 5
+PASSWORD_RESET_RESEND_SECONDS = 60
 
 UPLOAD_FOLDER = os.path.join(app.root_path, "static", "uploads")
 ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif"}
@@ -170,6 +195,37 @@ def init_database_schema() -> None:
             )
             """
         )
+        cursor.execute("SHOW COLUMNS FROM products LIKE 'minimum_order_exempt'")
+        if not cursor.fetchone():
+            cursor.execute(
+                "ALTER TABLE products ADD COLUMN minimum_order_exempt BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS weekly_deal_products (
+                product_id INT PRIMARY KEY,
+                position INT NOT NULL DEFAULT 0,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                setting_key VARCHAR(100) PRIMARY KEY,
+                setting_value VARCHAR(255) NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute(
+            """
+            INSERT IGNORE INTO app_settings (setting_key, setting_value)
+            VALUES (%s, %s)
+            """,
+            (MINIMUM_ORDER_SETTING_KEY, str(DEFAULT_MINIMUM_ORDER_AMOUNT)),
+        )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS orders (
@@ -184,10 +240,20 @@ def init_database_schema() -> None:
             )
             """
         )
+        cursor.execute("SHOW COLUMNS FROM orders LIKE 'delivery_fee'")
+        if not cursor.fetchone():
+            cursor.execute(
+                "ALTER TABLE orders ADD COLUMN delivery_fee DECIMAL(10, 2) NOT NULL DEFAULT 0.00 AFTER total_price"
+            )
         cursor.execute("SHOW COLUMNS FROM orders LIKE 'payment_method'")
         if not cursor.fetchone():
             cursor.execute(
                 "ALTER TABLE orders ADD COLUMN payment_method VARCHAR(50) NOT NULL DEFAULT 'Nakit' AFTER shipping_address"
+            )
+        cursor.execute("SHOW COLUMNS FROM orders LIKE 'phone'")
+        if not cursor.fetchone():
+            cursor.execute(
+                "ALTER TABLE orders ADD COLUMN phone VARCHAR(30) NULL AFTER shipping_address"
             )
         cursor.execute("SHOW COLUMNS FROM orders LIKE 'latitude'")
         if not cursor.fetchone():
@@ -249,11 +315,53 @@ def init_database_schema() -> None:
             )
             """
         )
+        # Google / telefon ile giriş için kullanıcı tablosu genişletmeleri.
+        # Telefonla kayıt olanların e-postası olmayabilir -> email NULL olabilir
+        # (UNIQUE indeks birden fazla NULL değere izin verir).
+        cursor.execute("SHOW COLUMNS FROM users LIKE 'email'")
+        email_column = cursor.fetchone()
+        if email_column and str(email_column[2]).upper() == "NO":
+            cursor.execute("ALTER TABLE users MODIFY email VARCHAR(190) NULL")
+        cursor.execute("SHOW COLUMNS FROM users LIKE 'phone'")
+        if not cursor.fetchone():
+            cursor.execute("ALTER TABLE users ADD COLUMN phone VARCHAR(20) NULL UNIQUE AFTER email")
+        cursor.execute("SHOW COLUMNS FROM users LIKE 'firebase_uid'")
+        if not cursor.fetchone():
+            cursor.execute(
+                "ALTER TABLE users ADD COLUMN firebase_uid VARCHAR(128) NULL UNIQUE AFTER phone"
+            )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS password_reset_codes (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                code_hash VARCHAR(255) NOT NULL,
+                expires_at DATETIME NOT NULL,
+                attempts INT NOT NULL DEFAULT 0,
+                used TINYINT(1) NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL,
+                INDEX idx_reset_user (user_id),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
         conn.commit()
         cursor.close()
 
 
 init_database_schema()
+
+
+def get_minimum_order_amount(cursor) -> Decimal:
+    cursor.execute(
+        "SELECT setting_value FROM app_settings WHERE setting_key = %s",
+        (MINIMUM_ORDER_SETTING_KEY,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        raise RuntimeError("Minimum order setting is missing from the database.")
+    return Decimal(str(row["setting_value"]))
+
 
 # ---------------------------------------------------------------------------
 # 2. Pydantic Doğrulama Modelleri
@@ -269,6 +377,27 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1)
 
 
+class FirebaseLoginRequest(BaseModel):
+    id_token: str = Field(min_length=20)
+    name: Optional[str] = Field(default=None, max_length=100)
+    phone: Optional[str] = Field(default=None, max_length=50)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class PhoneResetPasswordRequest(BaseModel):
+    id_token: str = Field(min_length=20)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
 class OrderItemRequest(BaseModel):
     product_id: int = Field(gt=0, strict=True)
     quantity: int = Field(gt=0, le=2147483647, strict=True)
@@ -279,6 +408,7 @@ class CreateOrderRequest(BaseModel):
     address_id: Optional[int] = Field(default=None)
     shipping_address: Optional[str] = Field(default=None, max_length=500)
     full_address: Optional[str] = Field(default=None, max_length=500)
+    phone: Optional[str] = Field(default=None, max_length=50)
     latitude: Optional[float] = Field(default=None)
     longitude: Optional[float] = Field(default=None)
     payment_method: Optional[str] = Field(default="Nakit", max_length=50)
@@ -288,12 +418,16 @@ class CreateOrderRequest(BaseModel):
 # 3. Güvenlik, CSRF ve JWT Yardımcıları
 # ---------------------------------------------------------------------------
 def generate_jwt_token(user_id: int, email: str, name: str) -> str:
-    """Kullanıcı için 7 gün geçerli imzalı JWT erişim token'ı oluşturur."""
+    """Kullanıcı için 30 gün geçerli imzalı JWT erişim token'ı oluşturur.
+
+    Mobil uygulama her açılışta /api/auth/refresh ile token'ı yenilediği için,
+    kullanıcı çıkış yapmadığı sürece oturum açık kalır.
+    """
     payload = {
         "user_id": user_id,
         "email": email,
         "name": name,
-        "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7),
+        "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30),
         "iat": datetime.datetime.now(datetime.timezone.utc),
     }
     return jwt.encode(payload, JWT_SECRET_KEY, algorithm="HS256")
@@ -505,6 +639,428 @@ def api_login():
             cursor.close()
 
 
+@app.post("/api/auth/refresh")
+@token_required
+def api_refresh_token():
+    """Geçerli token ile yeni (süresi uzatılmış) bir token döndürür.
+
+    Kullanıcı silinmişse 401 döner; böylece uygulama oturumu kapatır.
+    """
+    user_id = request.current_user.get("user_id")
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute("SELECT id, name, email, phone FROM users WHERE id = %s", (user_id,))
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({"error": "Kullanıcı bulunamadı."}), 401
+
+            contact = user.get("email") or user.get("phone") or ""
+            token = generate_jwt_token(user_id=user["id"], email=contact, name=user["name"])
+            return jsonify({
+                "success": True,
+                "token": token,
+                "user": {
+                    "id": user["id"],
+                    "name": user["name"],
+                    "email": contact,
+                    "phone": user.get("phone"),
+                },
+            })
+        except Exception:
+            logger.exception("Token yenileme sırasında hata")
+            return jsonify({"error": "Oturum yenilenemedi."}), 500
+        finally:
+            cursor.close()
+
+
+def verify_firebase_id_token(id_token: str) -> Optional[Dict[str, Any]]:
+    """Firebase ID token'ını Google sunucuları üzerinden doğrular ve kullanıcı bilgilerini döner."""
+    # 1. Yöntem: Firebase Identity Toolkit REST API (FIREBASE_WEB_API_KEY tanımlıysa)
+    if FIREBASE_WEB_API_KEY:
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:lookup?key={quote_plus(FIREBASE_WEB_API_KEY)}"
+        payload = json.dumps({"idToken": id_token}).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+                users = body.get("users") or []
+                if not users:
+                    return None
+                info = users[0]
+                return {
+                    "uid": info.get("localId"),
+                    "email": (info.get("email") or "").strip().lower() or None,
+                    "phone": (info.get("phoneNumber") or "").strip() or None,
+                    "name": (info.get("displayName") or "").strip() or None,
+                }
+        except Exception:
+            logger.warning("Firebase accounts:lookup doğrulaması başarısız oldu")
+            return None
+
+    # 2. Yöntem: Google OAuth2 tokeninfo (FIREBASE_PROJECT_ID tanımlıysa)
+    if FIREBASE_PROJECT_ID:
+        url = f"https://oauth2.googleapis.com/tokeninfo?id_token={quote_plus(id_token)}"
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                info = json.loads(resp.read().decode("utf-8"))
+                aud = info.get("aud") or ""
+                if FIREBASE_PROJECT_ID and aud != FIREBASE_PROJECT_ID:
+                    logger.warning("Firebase token aud uyuşmazlığı: %s", aud)
+                    return None
+                uid = info.get("user_id") or info.get("sub")
+                if not uid:
+                    return None
+                return {
+                    "uid": uid,
+                    "email": (info.get("email") or "").strip().lower() or None,
+                    "phone": (info.get("phone_number") or "").strip() or None,
+                    "name": (info.get("name") or "").strip() or None,
+                }
+        except Exception:
+            logger.warning("Google tokeninfo doğrulaması başarısız oldu")
+            return None
+
+    return None
+
+
+def send_reset_email(to_email: str, code: str) -> bool:
+    """Şifre sıfırlama doğrulama kodunu SMTP üzerinden gönderir."""
+    if not (SMTP_HOST and SMTP_USER and SMTP_PASSWORD):
+        return False
+
+    msg = EmailMessage()
+    msg["Subject"] = f"Prestij Market - Şifre Sıfırlama Kodunuz: {code}"
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+    msg.set_content(
+        f"Merhaba,\n\n"
+        f"Prestij Market şifre sıfırlama doğrulama kodunuz: {code}\n\n"
+        f"Bu kod {PASSWORD_RESET_CODE_MINUTES} dakika boyunca geçerlidir.\n"
+        f"Bu işlemi siz başlatmadıysanız bu e-postayı dikkate almayın.\n"
+    )
+
+    try:
+        context = ssl.create_default_context()
+        if SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as server:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+                server.starttls(context=context)
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.send_message(msg)
+        return True
+    except Exception:
+        logger.exception("Şifre sıfırlama e-postası gönderilemedi")
+        return False
+
+
+@app.post("/api/auth/firebase")
+def api_firebase_login():
+    """Google veya Telefon (Firebase Auth) ile doğrulanmış kullanıcıyı sisteme giriş yaptırır."""
+    if not (FIREBASE_WEB_API_KEY or FIREBASE_PROJECT_ID):
+        return jsonify({
+            "error": "Google/Telefon girişi için sunucuda FIREBASE_WEB_API_KEY veya FIREBASE_PROJECT_ID henüz tanımlanmadı."
+        }), 503
+
+    data = request.get_json(silent=True) or {}
+    try:
+        req = FirebaseLoginRequest(**data)
+    except ValidationError as err:
+        first_error = err.errors()[0]["msg"]
+        return jsonify({"error": f"Geçersiz veri: {first_error}"}), 400
+
+    verified = verify_firebase_id_token(req.id_token)
+    if not verified or not verified.get("uid"):
+        return jsonify({"error": "Kimlik doğrulama anahtarı geçersiz veya süresi dolmuş."}), 401
+
+    firebase_uid = verified["uid"]
+    email = verified.get("email")
+    phone = (verified.get("phone") or (req.phone or "")).strip() or None
+    fallback_name = (
+        (req.name or "").strip()
+        or verified.get("name")
+        or (email.split("@")[0] if email else None)
+        or (f"Kullanıcı {phone[-4:]}" if phone and len(phone) >= 4 else "Prestij Müşterisi")
+    )
+
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            user = None
+            cursor.execute(
+                "SELECT id, name, email, phone, firebase_uid FROM users WHERE firebase_uid = %s",
+                (firebase_uid,),
+            )
+            user = cursor.fetchone()
+
+            if not user and email:
+                cursor.execute(
+                    "SELECT id, name, email, phone, firebase_uid FROM users WHERE email = %s",
+                    (email,),
+                )
+                user = cursor.fetchone()
+
+            if not user and phone:
+                cursor.execute(
+                    "SELECT id, name, email, phone, firebase_uid FROM users WHERE phone = %s",
+                    (phone,),
+                )
+                user = cursor.fetchone()
+
+            if user:
+                updates = []
+                params = []
+                provided_name = (req.name or "").strip()
+                if provided_name and provided_name != user.get("name"):
+                    updates.append("name = %s")
+                    params.append(provided_name)
+                if not user.get("firebase_uid"):
+                    updates.append("firebase_uid = %s")
+                    params.append(firebase_uid)
+                if email and not user.get("email"):
+                    updates.append("email = %s")
+                    params.append(email)
+                if phone and not user.get("phone"):
+                    updates.append("phone = %s")
+                    params.append(phone)
+                if updates:
+                    params.append(user["id"])
+                    cursor.execute(
+                        f"UPDATE users SET {', '.join(updates)} WHERE id = %s",
+                        tuple(params),
+                    )
+                    conn.commit()
+                user_id = user["id"]
+                user_name = provided_name or user["name"]
+                user_email = user.get("email") or email
+                user_phone = user.get("phone") or phone
+            else:
+                random_pw_hash = generate_password_hash(secrets.token_urlsafe(32))
+                cursor.execute(
+                    "INSERT INTO users (name, email, phone, firebase_uid, password_hash) VALUES (%s, %s, %s, %s, %s)",
+                    (fallback_name, email, phone, firebase_uid, random_pw_hash),
+                )
+                conn.commit()
+                user_id = cursor.lastrowid
+                user_name = fallback_name
+                user_email = email
+                user_phone = phone
+
+            contact = user_email or user_phone or ""
+            token = generate_jwt_token(user_id=user_id, email=contact, name=user_name)
+            return jsonify({
+                "success": True,
+                "token": token,
+                "user": {
+                    "id": user_id,
+                    "name": user_name,
+                    "email": contact,
+                    "phone": user_phone,
+                },
+            })
+        except Exception:
+            conn.rollback()
+            logger.exception("Firebase giriş işlemi sırasında hata")
+            return jsonify({"error": "Giriş işlemi tamamlanamadı. Lütfen tekrar deneyin."}), 500
+        finally:
+            cursor.close()
+
+
+@app.post("/api/auth/forgot-password")
+def api_forgot_password():
+    """E-posta adresine 6 haneli şifre sıfırlama kodu gönderir."""
+    if not (SMTP_HOST and SMTP_USER and SMTP_PASSWORD):
+        return jsonify({
+            "error": "E-posta gönderim servisi (SMTP) sunucuda henüz yapılandırılmadı."
+        }), 503
+
+    data = request.get_json(silent=True) or {}
+    try:
+        req = ForgotPasswordRequest(**data)
+    except ValidationError as err:
+        first_error = err.errors()[0]["msg"]
+        return jsonify({"error": f"Geçersiz e-posta: {first_error}"}), 400
+
+    email = req.email.strip().lower()
+    now = datetime.datetime.utcnow()
+
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute("SELECT id, name, email FROM users WHERE email = %s", (email,))
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({"error": "Bu e-posta adresiyle kayıtlı bir hesap bulunamadı."}), 404
+
+            cursor.execute(
+                "SELECT created_at FROM password_reset_codes WHERE user_id = %s AND used = 0 ORDER BY id DESC LIMIT 1",
+                (user["id"],),
+            )
+            last_code = cursor.fetchone()
+            if last_code and last_code.get("created_at"):
+                elapsed = (now - last_code["created_at"]).total_seconds()
+                if elapsed < PASSWORD_RESET_RESEND_SECONDS:
+                    wait_sec = int(PASSWORD_RESET_RESEND_SECONDS - elapsed)
+                    return jsonify({
+                        "error": f"Yeni kod istemeden önce lütfen {wait_sec} saniye bekleyin."
+                    }), 429
+
+            code = f"{secrets.randbelow(1000000):06d}"
+            code_hash = generate_password_hash(code)
+            expires_at = now + datetime.timedelta(minutes=PASSWORD_RESET_CODE_MINUTES)
+
+            cursor.execute("UPDATE password_reset_codes SET used = 1 WHERE user_id = %s AND used = 0", (user["id"],))
+            cursor.execute(
+                """
+                INSERT INTO password_reset_codes (user_id, code_hash, expires_at, attempts, used, created_at)
+                VALUES (%s, %s, %s, 0, 0, %s)
+                """,
+                (user["id"], code_hash, expires_at, now),
+            )
+            conn.commit()
+
+            if not send_reset_email(email, code):
+                return jsonify({"error": "Doğrulama e-postası gönderilemedi. SMTP ayarlarını kontrol edin."}), 500
+
+            return jsonify({
+                "success": True,
+                "message": "6 haneli doğrulama kodu e-posta adresinize gönderildi.",
+            })
+        except Exception:
+            conn.rollback()
+            logger.exception("Şifre sıfırlama kodu oluşturulamadı")
+            return jsonify({"error": "İşlem gerçekleştirilemedi. Lütfen tekrar deneyin."}), 500
+        finally:
+            cursor.close()
+
+
+@app.post("/api/auth/reset-password")
+def api_reset_password():
+    """E-postaya gelen 6 haneli kodu doğrulayarak şifreyi günceller."""
+    data = request.get_json(silent=True) or {}
+    try:
+        req = ResetPasswordRequest(**data)
+    except ValidationError as err:
+        first_error = err.errors()[0]["msg"]
+        return jsonify({"error": f"Geçersiz veri: {first_error}"}), 400
+
+    email = req.email.strip().lower()
+    now = datetime.datetime.utcnow()
+
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute("SELECT id FROM users WHERE email = %s", (email,))
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({"error": "Doğrulama kodu geçersiz veya süresi dolmuş."}), 400
+
+            cursor.execute(
+                """
+                SELECT id, code_hash, expires_at, attempts
+                FROM password_reset_codes
+                WHERE user_id = %s AND used = 0
+                ORDER BY id DESC LIMIT 1
+                """,
+                (user["id"],),
+            )
+            reset_row = cursor.fetchone()
+            if not reset_row:
+                return jsonify({"error": "Aktif bir doğrulama kodu bulunamadı."}), 400
+
+            if reset_row["expires_at"] < now or reset_row["attempts"] >= PASSWORD_RESET_MAX_ATTEMPTS:
+                cursor.execute("UPDATE password_reset_codes SET used = 1 WHERE id = %s", (reset_row["id"],))
+                conn.commit()
+                return jsonify({"error": "Doğrulama kodunun süresi dolmuş. Lütfen yeni kod isteyin."}), 400
+
+            if not check_password_hash(reset_row["code_hash"], req.code):
+                new_attempts = reset_row["attempts"] + 1
+                mark_used = 1 if new_attempts >= PASSWORD_RESET_MAX_ATTEMPTS else 0
+                cursor.execute(
+                    "UPDATE password_reset_codes SET attempts = %s, used = %s WHERE id = %s",
+                    (new_attempts, mark_used, reset_row["id"]),
+                )
+                conn.commit()
+                return jsonify({"error": "Girdiğiniz doğrulama kodu hatalı."}), 400
+
+            new_hash = generate_password_hash(req.new_password)
+            cursor.execute("UPDATE users SET password_hash = %s WHERE id = %s", (new_hash, user["id"]))
+            cursor.execute("UPDATE password_reset_codes SET used = 1 WHERE id = %s", (reset_row["id"],))
+            conn.commit()
+
+            return jsonify({
+                "success": True,
+                "message": "Şifreniz başarıyla güncellendi. Yeni şifrenizle giriş yapabilirsiniz.",
+            })
+        except Exception:
+            conn.rollback()
+            logger.exception("Şifre sıfırlama hatası")
+            return jsonify({"error": "Şifre güncellenemedi. Lütfen tekrar deneyin."}), 500
+        finally:
+            cursor.close()
+
+
+@app.post("/api/auth/reset-password-phone")
+def api_reset_password_phone():
+    """Firebase SMS doğrulamasından alınan id_token ile kullanıcının şifresini günceller."""
+    if not (FIREBASE_WEB_API_KEY or FIREBASE_PROJECT_ID):
+        return jsonify({
+            "error": "Telefon doğrulaması için sunucuda FIREBASE_WEB_API_KEY veya FIREBASE_PROJECT_ID henüz tanımlanmadı."
+        }), 503
+
+    data = request.get_json(silent=True) or {}
+    try:
+        req = PhoneResetPasswordRequest(**data)
+    except ValidationError as err:
+        first_error = err.errors()[0]["msg"]
+        return jsonify({"error": f"Geçersiz veri: {first_error}"}), 400
+
+    verified = verify_firebase_id_token(req.id_token)
+    if not verified or not verified.get("uid"):
+        return jsonify({"error": "Telefon doğrulama anahtarı geçersiz veya süresi dolmuş."}), 401
+
+    phone = verified.get("phone")
+    firebase_uid = verified["uid"]
+
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            user = None
+            if phone:
+                cursor.execute("SELECT id FROM users WHERE phone = %s", (phone,))
+                user = cursor.fetchone()
+            if not user:
+                cursor.execute("SELECT id FROM users WHERE firebase_uid = %s", (firebase_uid,))
+                user = cursor.fetchone()
+            if not user:
+                return jsonify({"error": "Bu telefon numarasıyla kayıtlı bir hesap bulunamadı."}), 404
+
+            new_hash = generate_password_hash(req.new_password)
+            cursor.execute(
+                "UPDATE users SET password_hash = %s, firebase_uid = COALESCE(firebase_uid, %s) WHERE id = %s",
+                (new_hash, firebase_uid, user["id"]),
+            )
+            conn.commit()
+            return jsonify({
+                "success": True,
+                "message": "Şifreniz başarıyla güncellendi.",
+            })
+        except Exception:
+            conn.rollback()
+            logger.exception("Telefon ile şifre sıfırlama hatası")
+            return jsonify({"error": "Şifre güncellenemedi. Lütfen tekrar deneyin."}), 500
+        finally:
+            cursor.close()
+
+
 @app.get("/api/categories")
 def api_categories():
     with get_db() as conn:
@@ -516,6 +1072,22 @@ def api_categories():
         except Exception:
             logger.exception("Kategoriler getirilirken hata")
             return jsonify({"error": "Kategoriler yüklenemedi."}), 500
+        finally:
+            cursor.close()
+
+
+@app.get("/api/store-settings")
+def api_store_settings():
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            minimum_order_amount = get_minimum_order_amount(cursor)
+            return jsonify({
+                "minimum_order_amount": float(minimum_order_amount),
+            })
+        except Exception:
+            logger.exception("Mağaza ayarları getirilirken hata")
+            return jsonify({"error": "Mağaza ayarları yüklenemedi."}), 500
         finally:
             cursor.close()
 
@@ -544,6 +1116,7 @@ def api_products():
                     products.price,
                     products.image,
                     products.stock,
+                    products.minimum_order_exempt,
                     categories.name AS category
                 FROM products
                 JOIN categories ON products.category_id = categories.id
@@ -568,6 +1141,37 @@ def api_products():
         except Exception:
             logger.exception("Ürünler getirilirken hata")
             return jsonify({"error": "Ürünler yüklenemedi."}), 500
+        finally:
+            cursor.close()
+
+
+@app.get("/api/weekly-deals")
+def api_weekly_deals():
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute(
+                """
+                SELECT
+                    products.id,
+                    products.name,
+                    products.description,
+                    products.price,
+                    products.image,
+                    products.stock,
+                    products.minimum_order_exempt,
+                    categories.name AS category
+                FROM weekly_deal_products
+                JOIN products ON products.id = weekly_deal_products.product_id
+                JOIN categories ON products.category_id = categories.id
+                WHERE products.active = TRUE AND products.stock > 0
+                ORDER BY weekly_deal_products.position, weekly_deal_products.added_at
+                """
+            )
+            return jsonify(cursor.fetchall())
+        except Exception:
+            logger.exception("Haftanın indirim ürünleri getirilirken hata")
+            return jsonify({"error": "Haftanın indirimleri yüklenemedi."}), 500
         finally:
             cursor.close()
 
@@ -629,7 +1233,7 @@ def api_create_order():
             conn.start_transaction()
             cursor.execute(
                 f"""
-                SELECT id, name, price, stock
+                SELECT id, name, price, stock, minimum_order_exempt
                 FROM products
                 WHERE id IN ({format_strings}) AND active = TRUE
                 ORDER BY id
@@ -645,11 +1249,15 @@ def api_create_order():
                     return jsonify({"error": f"Ürün bulunamadı veya satışta değil (ID: {product_id})"}), 404
 
             total_price = Decimal("0.00")
+            minimum_order_total = Decimal("0.00")
             order_details = []
             for product_id, quantity in quantities_by_product.items():
                 product = products_db[product_id]
                 item_price = Decimal(str(product["price"])).quantize(Decimal("0.01"))
-                total_price += item_price * quantity
+                line_total = item_price * quantity
+                total_price += line_total
+                if not product.get("minimum_order_exempt"):
+                    minimum_order_total += line_total
                 order_details.append({
                     "product_id": product_id,
                     "quantity": quantity,
@@ -659,6 +1267,18 @@ def api_create_order():
             if total_price > Decimal("99999999.99"):
                 conn.rollback()
                 return jsonify({"error": "Sipariş toplamı izin verilen tutarı aşıyor."}), 400
+
+            minimum_order_amount = get_minimum_order_amount(cursor)
+            if minimum_order_total < minimum_order_amount:
+                conn.rollback()
+                return jsonify({
+                    "error": (
+                        f"Minimum sepet tutarı {minimum_order_amount:.2f} TL'dir. "
+                        "Sigara ve tütün ürünleri bu tutara dahil değildir."
+                    ),
+                    "minimum_order_amount": float(minimum_order_amount),
+                    "eligible_subtotal": float(minimum_order_total),
+                }), 400
 
             # Conditional updates keep stock nonnegative; all changes roll back if any item fails.
             for detail in order_details:
@@ -702,12 +1322,34 @@ def api_create_order():
                     order_lat = float(addr_row["latitude"]) if addr_row.get("latitude") is not None else None
                     order_lng = float(addr_row["longitude"]) if addr_row.get("longitude") is not None else None
 
+            # Müşterinin telefon numarasını tespit et ve gerekirse kaydet
+            customer_phone = (req.phone or "").strip()
+            if not customer_phone and user_id:
+                cursor.execute("SELECT phone FROM users WHERE id = %s", (user_id,))
+                urow = cursor.fetchone()
+                if urow and urow.get("phone"):
+                    customer_phone = str(urow["phone"]).strip()
+
+            if customer_phone and user_id:
+                cursor.execute(
+                    "UPDATE users SET phone = %s WHERE id = %s AND (phone IS NULL OR phone = '')",
+                    (customer_phone, user_id),
+                )
+
+            # Teslimat/gönderim ücreti hesabı: 1000 TL ve üzeri ÜCRETSİZ, altı için 50 TL
+            delivery_fee = (
+                Decimal("0.00")
+                if total_price >= FREE_DELIVERY_THRESHOLD or total_price == 0
+                else DELIVERY_FEE
+            )
+            final_total_price = total_price + delivery_fee
+
             cursor.execute(
                 """
-                INSERT INTO orders (user_id, total_price, shipping_address, latitude, longitude, payment_method, status) 
-                VALUES (%s, %s, %s, %s, %s, %s, 'PENDING')
+                INSERT INTO orders (user_id, total_price, delivery_fee, shipping_address, phone, latitude, longitude, payment_method, status) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'PENDING')
                 """,
-                (user_id, total_price, shipping_address, order_lat, order_lng, payment_method),
+                (user_id, final_total_price, delivery_fee, shipping_address, customer_phone or None, order_lat, order_lng, payment_method),
             )
             order_id = cursor.lastrowid
 
@@ -724,12 +1366,14 @@ def api_create_order():
             conn.commit()
             logger.info(
                 f"Sipariş #{order_id} kullanıcı #{user_id} tarafından oluşturuldu. "
-                f"Tutar: {total_price} TL, Ödeme: {payment_method}"
+                f"Tutar: {final_total_price} TL (Ürünler: {total_price} TL + Teslimat: {delivery_fee} TL), Ödeme: {payment_method}"
             )
             return jsonify({
                 "success": True,
                 "order_id": order_id,
-                "total_price": float(total_price),
+                "subtotal": float(total_price),
+                "delivery_fee": float(delivery_fee),
+                "total_price": float(final_total_price),
                 "payment_method": payment_method,
                 "status": order_status_label("PENDING"),
                 "status_code": "PENDING",
@@ -1007,6 +1651,7 @@ def admin_dashboard():
             order_count = cursor.fetchone()["total"]
             cursor.execute("SELECT COALESCE(SUM(total_price), 0) AS total FROM orders")
             revenue = cursor.fetchone()["total"]
+            minimum_order_amount = get_minimum_order_amount(cursor)
             cursor.execute(
                 """
                 SELECT id, name, stock
@@ -1025,6 +1670,7 @@ def admin_dashboard():
                 order_count=order_count,
                 revenue=revenue,
                 low_stock_products=low_stock_products,
+                minimum_order_amount=minimum_order_amount,
             )
         except Exception:
             logger.exception("Admin dashboard yüklenirken hata")
@@ -1037,9 +1683,44 @@ def admin_dashboard():
                 order_count=0,
                 revenue=0,
                 low_stock_products=[],
+                minimum_order_amount=DEFAULT_MINIMUM_ORDER_AMOUNT,
             )
         finally:
             cursor.close()
+
+
+@app.post("/admin/settings/minimum-order")
+@admin_required
+def admin_update_minimum_order():
+    raw_amount = request.form.get("minimum_order_amount", "").strip()
+    try:
+        amount = Decimal(raw_amount).quantize(Decimal("0.01"))
+        if not amount.is_finite() or amount < 0 or amount > Decimal("99999999.99"):
+            raise InvalidOperation
+    except (InvalidOperation, ValueError):
+        flash("Minimum sepet tutarı geçerli ve 0 TL veya üzeri olmalıdır.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO app_settings (setting_key, setting_value)
+                VALUES (%s, %s)
+                ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)
+                """,
+                (MINIMUM_ORDER_SETTING_KEY, str(amount)),
+            )
+            conn.commit()
+            flash(f"Minimum sepet tutarı {amount:.2f} TL olarak güncellendi.", "success")
+        except Exception:
+            conn.rollback()
+            logger.exception("Minimum sepet tutarı güncellenirken hata")
+            flash("Minimum sepet tutarı güncellenemedi.", "error")
+        finally:
+            cursor.close()
+    return redirect(url_for("admin_dashboard"))
 
 
 @app.route("/admin/products", methods=["GET", "POST"])
@@ -1051,6 +1732,7 @@ def admin_products():
             name = request.form.get("name", "").strip()
             description = request.form.get("description", "").strip()
             category_id = request.form.get("category_id", "").strip()
+            minimum_order_exempt = request.form.get("minimum_order_exempt") == "on"
             image = request.files.get("image")
 
             try:
@@ -1085,10 +1767,16 @@ def admin_products():
             try:
                 cursor.execute(
                     """
-                    INSERT INTO products (name, description, price, image, stock, category_id, active)
-                    VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+                    INSERT INTO products (
+                        name, description, price, image, stock, category_id, active,
+                        minimum_order_exempt
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s)
                     """,
-                    (name, description, price, filename, stock, int(category_id)),
+                    (
+                        name, description, price, filename, stock, int(category_id),
+                        minimum_order_exempt,
+                    ),
                 )
                 conn.commit()
                 flash("Ürün başarıyla kaydedildi.", "success")
@@ -1107,7 +1795,7 @@ def admin_products():
             cursor.execute(
                 """
                 SELECT p.id, p.name, p.description, p.price, p.image, p.stock,
-                       p.active, c.name AS category
+                       p.active, p.minimum_order_exempt, c.name AS category
                 FROM products p
                 LEFT JOIN categories c ON c.id = p.category_id
                 ORDER BY p.id DESC
@@ -1135,6 +1823,7 @@ def admin_edit_product(product_id: int):
             name = request.form.get("name", "").strip()
             description = request.form.get("description", "").strip()
             category_id = request.form.get("category_id", "").strip()
+            minimum_order_exempt = request.form.get("minimum_order_exempt") == "on"
             image = request.files.get("image")
 
             try:
@@ -1176,10 +1865,13 @@ def admin_edit_product(product_id: int):
                     """
                     UPDATE products
                     SET name = %s, description = %s, price = %s, stock = %s,
-                        category_id = %s, image = %s
+                        category_id = %s, image = %s, minimum_order_exempt = %s
                     WHERE id = %s
                     """,
-                    (name, description, price, stock, int(category_id), image_filename, product_id),
+                    (
+                        name, description, price, stock, int(category_id), image_filename,
+                        minimum_order_exempt, product_id,
+                    ),
                 )
                 conn.commit()
                 if new_image_path and product["image"]:
@@ -1292,9 +1984,15 @@ def _serialize_order_rows(rows: List[Dict[str, Any]], *, for_json: bool = False)
             google_maps_url = f"https://www.google.com/maps/dir/?api=1&destination={maps_target}"
             google_maps_embed_url = f"https://maps.google.com/maps?q={maps_target}&hl=tr&z=15&output=embed"
 
+            total_val = float(row["total_price"] or 0)
+            delivery_fee_val = float(row.get("delivery_fee") or 0)
+            subtotal_val = round(max(0.0, total_val - delivery_fee_val), 2)
+
             orders_by_id[oid] = {
                 "order_id": oid,
-                "total_price": float(row["total_price"] or 0),
+                "total_price": total_val,
+                "subtotal": subtotal_val,
+                "delivery_fee": delivery_fee_val,
                 "shipping_address": shipping_addr,
                 "latitude": lat,
                 "longitude": lng,
@@ -1306,6 +2004,7 @@ def _serialize_order_rows(rows: List[Dict[str, Any]], *, for_json: bool = False)
                 "is_active": norm_status in ACTIVE_ORDER_STATUSES,
                 "user_name": row.get("user_name") or "Misafir Kullanıcı",
                 "user_email": row.get("user_email") or "-",
+                "user_phone": (row.get("user_phone") or "").strip() or "-",
                 "created_at": (
                     created_dt.strftime("%Y-%m-%d %H:%M:%S")
                     if (for_json and created_dt)
@@ -1377,7 +2076,9 @@ def admin_orders():
                 SELECT 
                     o.id as order_id, 
                     o.total_price, 
+                    COALESCE(o.delivery_fee, 0.00) as delivery_fee,
                     o.shipping_address,
+                    COALESCE(NULLIF(o.phone, ''), NULLIF(u.phone, ''), '') as user_phone,
                     o.latitude,
                     o.longitude,
                     o.payment_method,
@@ -1437,7 +2138,9 @@ def api_admin_active_orders():
                 SELECT 
                     o.id as order_id, 
                     o.total_price, 
+                    COALESCE(o.delivery_fee, 0.00) as delivery_fee,
                     o.shipping_address,
+                    COALESCE(NULLIF(o.phone, ''), NULLIF(u.phone, ''), '') as user_phone,
                     o.latitude,
                     o.longitude,
                     o.payment_method,
@@ -1587,7 +2290,9 @@ def api_admin_history_orders():
                     SELECT 
                         o.id as order_id, 
                         o.total_price, 
+                        COALESCE(o.delivery_fee, 0.00) as delivery_fee,
                         o.shipping_address,
+                        COALESCE(NULLIF(o.phone, ''), NULLIF(u.phone, ''), '') as user_phone,
                         o.latitude,
                         o.longitude,
                         o.payment_method,
@@ -1879,7 +2584,9 @@ def courier_dashboard():
                 SELECT 
                     o.id as order_id, 
                     o.total_price, 
+                    COALESCE(o.delivery_fee, 0.00) as delivery_fee,
                     o.shipping_address,
+                    COALESCE(NULLIF(o.phone, ''), NULLIF(u.phone, ''), '') as user_phone,
                     o.latitude,
                     o.longitude,
                     o.payment_method,
@@ -1919,7 +2626,9 @@ def api_courier_active_orders():
                 SELECT 
                     o.id as order_id, 
                     o.total_price, 
+                    COALESCE(o.delivery_fee, 0.00) as delivery_fee,
                     o.shipping_address,
+                    COALESCE(NULLIF(o.phone, ''), NULLIF(u.phone, ''), '') as user_phone,
                     o.latitude,
                     o.longitude,
                     o.payment_method,
@@ -2024,6 +2733,121 @@ def admin_delete_category(category_id: int):
 
 
 # --- KAMPANYA YÖNETİMİ (ADMIN) ---
+@app.get("/admin/weekly-deals")
+@admin_required
+def admin_weekly_deals():
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute(
+                """
+                SELECT products.id, products.name, products.price, products.stock,
+                       products.active, products.image, categories.name AS category
+                FROM weekly_deal_products
+                JOIN products ON products.id = weekly_deal_products.product_id
+                LEFT JOIN categories ON categories.id = products.category_id
+                ORDER BY weekly_deal_products.position, weekly_deal_products.added_at
+                """
+            )
+            weekly_products = cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT products.id, products.name, products.price, products.stock,
+                       categories.name AS category
+                FROM products
+                LEFT JOIN categories ON categories.id = products.category_id
+                LEFT JOIN weekly_deal_products
+                    ON weekly_deal_products.product_id = products.id
+                WHERE products.active = TRUE AND weekly_deal_products.product_id IS NULL
+                ORDER BY products.name
+                """
+            )
+            available_products = cursor.fetchall()
+            return render_template(
+                "admin/weekly_deals.html",
+                weekly_products=weekly_products,
+                available_products=available_products,
+            )
+        except Exception:
+            logger.exception("Haftanın indirimleri admin panelinde listelenemedi")
+            flash("Haftanın indirimleri yüklenirken bir hata oluştu.", "error")
+            return render_template(
+                "admin/weekly_deals.html",
+                weekly_products=[],
+                available_products=[],
+            )
+        finally:
+            cursor.close()
+
+
+@app.post("/admin/weekly-deals/add")
+@admin_required
+def admin_add_weekly_deal():
+    product_id = request.form.get("product_id", type=int)
+    if product_id is None:
+        flash("Eklemek için geçerli bir ürün seçin.", "error")
+        return redirect(url_for("admin_weekly_deals"))
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT id FROM products WHERE id = %s AND active = TRUE",
+                (product_id,),
+            )
+            if not cursor.fetchone():
+                flash("Ürün bulunamadı veya yayında değil.", "error")
+                return redirect(url_for("admin_weekly_deals"))
+
+            cursor.execute(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM weekly_deal_products"
+            )
+            position = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT IGNORE INTO weekly_deal_products (product_id, position)
+                VALUES (%s, %s)
+                """,
+                (product_id, position),
+            )
+            if cursor.rowcount:
+                conn.commit()
+                flash("Ürün haftanın indirimlerine eklendi.", "success")
+            else:
+                flash("Bu ürün haftanın indirimlerinde zaten bulunuyor.", "error")
+        except Exception:
+            conn.rollback()
+            logger.exception("Haftanın indirimlerine ürün eklenemedi")
+            flash("Ürün haftanın indirimlerine eklenemedi.", "error")
+        finally:
+            cursor.close()
+    return redirect(url_for("admin_weekly_deals"))
+
+
+@app.post("/admin/weekly-deals/remove/<int:product_id>")
+@admin_required
+def admin_remove_weekly_deal(product_id: int):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "DELETE FROM weekly_deal_products WHERE product_id = %s",
+                (product_id,),
+            )
+            if cursor.rowcount:
+                conn.commit()
+                flash("Ürün haftanın indirimlerinden çıkarıldı.", "success")
+            else:
+                flash("Ürün haftanın indirimlerinde bulunamadı.", "error")
+        except Exception:
+            conn.rollback()
+            logger.exception("Haftanın indirimlerinden ürün çıkarılamadı")
+            flash("Ürün haftanın indirimlerinden çıkarılamadı.", "error")
+        finally:
+            cursor.close()
+    return redirect(url_for("admin_weekly_deals"))
+
+
 @app.route("/admin/campaigns", methods=["GET", "POST"])
 @admin_required
 def admin_campaigns():

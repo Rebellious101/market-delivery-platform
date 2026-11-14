@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 class AppConstants {
   // Uygulama Bilgileri
-  static const String appName = 'Market App';
+  static const String appName = 'Prestij Market';
   static const String appVersion = '1.0.0';
 
   // Tema Renkleri

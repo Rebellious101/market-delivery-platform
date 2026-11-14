@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:http/http.dart' as http;
@@ -9,9 +10,10 @@ import 'core/constants.dart';
 import 'core/local_storage.dart';
 import 'core/localization.dart';
 import 'core/session_manager.dart';
-import 'models/campaign_model.dart';
+import 'firebase_options.dart';
 import 'models/category_model.dart';
 import 'models/product_model.dart';
+import 'screen/add_to_cart_control.dart';
 import 'screen/address_book.dart';
 import 'screen/auth_screen.dart';
 import 'screen/cart_manager.dart';
@@ -22,8 +24,17 @@ import 'screen/product_detail_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (_) {
+    // Masaüstü veya desteklenmeyen platformlarda sessizce devam eder.
+  }
   await LocalStorage.instance.init();
   SessionManager.instance.restoreSession();
+  // Oturum açıksa token'ı arka planda yenile (çıkış yapılmadıkça oturum açık kalır).
+  unawaited(SessionManager.instance.refreshToken());
   CartManager().restoreCart();
   AddressBook.instance.restoreAddresses();
   runApp(const MarketApp());
@@ -110,14 +121,16 @@ class MarketHomePage extends StatefulWidget {
 
 class _MarketHomePageState extends State<MarketHomePage> {
   late Future<List<Product>> _productsFuture;
+  late Future<List<Product>> _weeklyDealsFuture;
   Future<List<Category>> _categoriesFuture = Future.value(const []);
-  late Future<List<Campaign>> _campaignsFuture;
   int? _selectedCategoryId;
   int _selectedTab = 0;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
   Timer? _searchDebounce;
   final Set<int> _favoriteProductIds = {};
+
+  static const int favoritesCategoryId = -999;
 
   void _onAddressBookChanged() {
     if (mounted) setState(() {});
@@ -126,9 +139,10 @@ class _MarketHomePageState extends State<MarketHomePage> {
   @override
   void initState() {
     super.initState();
+    _loadFavorites();
     _productsFuture = _fetchProducts();
+    _weeklyDealsFuture = _fetchWeeklyDeals();
     _categoriesFuture = _fetchCategories();
-    _campaignsFuture = _fetchCampaigns();
     unawaited(AddressBook.instance.fetchUserAddresses());
     AddressBook.instance.addListener(_onAddressBookChanged);
 
@@ -136,6 +150,31 @@ class _MarketHomePageState extends State<MarketHomePage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showDeliveryInfoOnce();
     });
+  }
+
+  void _loadFavorites() {
+    try {
+      final raw = LocalStorage.instance.read('favorite_product_ids');
+      if (raw is List) {
+        _favoriteProductIds.addAll(raw.map((e) => int.tryParse(e.toString()) ?? 0).where((id) => id > 0));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _toggleFavorite(int productId) async {
+    setState(() {
+      if (_favoriteProductIds.contains(productId)) {
+        _favoriteProductIds.remove(productId);
+      } else {
+        _favoriteProductIds.add(productId);
+      }
+    });
+    try {
+      await LocalStorage.instance.write(
+        'favorite_product_ids',
+        _favoriteProductIds.toList(),
+      );
+    } catch (_) {}
   }
 
   Future<void> _showDeliveryInfoOnce() async {
@@ -213,8 +252,9 @@ class _MarketHomePageState extends State<MarketHomePage> {
 
   Future<List<Product>> _fetchProducts({int? categoryId}) async {
     try {
+      final isFavorites = categoryId == favoritesCategoryId;
       final uri = Uri.parse('${AppConstants.baseUrl}/api/products').replace(
-        queryParameters: categoryId == null
+        queryParameters: (categoryId == null || isFavorites)
             ? null
             : {'category_id': categoryId.toString()},
       );
@@ -228,6 +268,11 @@ class _MarketHomePageState extends State<MarketHomePage> {
         if (categoryId == null) {
           CartManager().syncWithProducts(products);
         }
+        if (isFavorites) {
+          return products
+              .where((p) => _favoriteProductIds.contains(p.id))
+              .toList();
+        }
         return products;
       }
 
@@ -237,6 +282,26 @@ class _MarketHomePageState extends State<MarketHomePage> {
         'Sunucuya zamanında bağlanılamadı. İnternet bağlantınızı kontrol edin.',
       );
     }
+  }
+
+  Future<List<Product>> _fetchWeeklyDeals() async {
+    final response = await http
+        .get(Uri.parse('${AppConstants.baseUrl}/api/weekly-deals'))
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode != 200) {
+      throw Exception(
+        'Haftanın indirimleri yüklenemedi (${response.statusCode}).',
+      );
+    }
+
+    final body = json.decode(response.body);
+    if (body is! List) {
+      throw const FormatException('Haftanın indirimleri yanıtı geçersiz.');
+    }
+    return body
+        .map((item) => Product.fromJson(item as Map<String, dynamic>))
+        .toList();
   }
 
   Future<List<Category>> _fetchCategories() async {
@@ -255,29 +320,6 @@ class _MarketHomePageState extends State<MarketHomePage> {
           .toList();
     } catch (_) {
       return const <Category>[];
-    }
-  }
-
-  Future<List<Campaign>> _fetchCampaigns() async {
-    try {
-      final response = await http
-          .get(Uri.parse('${AppConstants.baseUrl}/api/campaigns'))
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode != 200) {
-        return const <Campaign>[];
-      }
-
-      final body = json.decode(response.body);
-      if (body is List) {
-        return body
-            .whereType<Map<String, dynamic>>()
-            .map(Campaign.fromJson)
-            .toList();
-      }
-      return const <Campaign>[];
-    } catch (_) {
-      return const <Campaign>[];
     }
   }
 
@@ -401,14 +443,14 @@ class _MarketHomePageState extends State<MarketHomePage> {
       color: AppConstants.primaryColor,
       onRefresh: () async {
         final prodFuture = _fetchProducts(categoryId: _selectedCategoryId);
+        final weeklyDealsFuture = _fetchWeeklyDeals();
         final catFuture = _fetchCategories();
-        final campFuture = _fetchCampaigns();
         setState(() {
           _productsFuture = prodFuture;
+          _weeklyDealsFuture = weeklyDealsFuture;
           _categoriesFuture = catFuture;
-          _campaignsFuture = campFuture;
         });
-        await Future.wait([prodFuture, catFuture, campFuture]);
+        await Future.wait([prodFuture, weeklyDealsFuture, catFuture]);
       },
       child: CustomScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -427,7 +469,7 @@ class _MarketHomePageState extends State<MarketHomePage> {
           if (_searchQuery.isEmpty) ...[
             // 3. Fırsat / Kampanya Bannerı
             SliverToBoxAdapter(
-              child: _buildCampaignBanner(strings),
+              child: _buildWeeklyDealsCarousel(strings),
             ),
 
             // 4. Kategoriler Bölümü (Yatay Liste)
@@ -452,7 +494,7 @@ class _MarketHomePageState extends State<MarketHomePage> {
     );
   }
 
-  // Üst Bar: Logo ("Marketim") + "📍 Konum seçin >" + 🔔 Zili
+  // Üst Bar: Logo (AppConstants.appName) + "📍 Konum seçin >" + 🔔 Zili
   Widget _buildTopHeader(AppStrings strings) {
     final currentAddress = AddressBook.instance.selectedAddress;
     final addressText = currentAddress != null
@@ -634,199 +676,197 @@ class _MarketHomePageState extends State<MarketHomePage> {
     );
   }
 
-  // Fırsat / Kampanya Bannerı (Nane Yeşili Kart + Alışveriş Torbası & %50 İndirim Rozeti)
-  Widget _buildCampaignBanner(AppStrings strings) {
-    return FutureBuilder<List<Campaign>>(
-      future: _campaignsFuture,
+  Widget _buildWeeklyDealsCarousel(AppStrings strings) {
+    return FutureBuilder<List<Product>>(
+      future: _weeklyDealsFuture,
       builder: (context, snapshot) {
-        final latestCampaign = (snapshot.hasData && snapshot.data!.isNotEmpty)
-            ? snapshot.data!.first
-            : null;
-
-        return Column(
-          children: [
-            InkWell(
-              onTap: () {
-                setState(() => _selectedTab = 1);
-              },
-              borderRadius: BorderRadius.circular(22),
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                padding: const EdgeInsets.fromLTRB(20, 18, 14, 18),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(22),
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFFD6F5E3), Color(0xFFEAF8F0)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
+        final products = snapshot.data ?? const <Product>[];
+        return Padding(
+          padding: const EdgeInsets.only(top: 12, bottom: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
                 child: Row(
                   children: [
-                    // Sol Metinler
-                    Expanded(
-                      flex: 6,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppConstants.primaryColor,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              latestCampaign?.badgeText.isNotEmpty == true
-                                  ? latestCampaign!.badgeText
-                                  : strings.weeklyDeals,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            latestCampaign != null
-                                ? latestCampaign.title
-                                : strings.freshDiscounts,
-                            style: const TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w900,
-                              color: Color(0xFF134224),
-                              height: 1.25,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 10),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                strings.exploreNow,
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppConstants.primaryColor,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
+                    const Icon(
+                      Icons.local_fire_department_rounded,
+                      color: AppConstants.primaryColor,
+                      size: 21,
                     ),
-                    const SizedBox(width: 8),
-
-                    // Sağ: Görsel ve Daire İndirim Rozeti
-                    Expanded(
-                      flex: 4,
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(16),
-                            child: latestCampaign?.imageUrl != null
-                                ? Image.network(
-                                    latestCampaign!.imageUrl!,
-                                    height: 100,
-                                    width: double.infinity,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (_, _, _) =>
-                                        _buildFallbackBannerArt(),
-                                  )
-                                : _buildFallbackBannerArt(),
-                          ),
-                          Positioned(
-                            top: 0,
-                            right: 0,
-                            child: Container(
-                              padding: const EdgeInsets.all(7),
-                              decoration: const BoxDecoration(
-                                color: Color(0xFF12522B),
-                                shape: BoxShape.circle,
-                              ),
-                              child: Text(
-                                strings.upToDiscount,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 8.5,
-                                  fontWeight: FontWeight.w900,
-                                  height: 1.1,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
+                    const SizedBox(width: 6),
+                    Text(
+                      strings.weeklyDiscounts,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF1E2022),
                       ),
                     ),
                   ],
                 ),
               ),
-            ),
-
-            // Banner Sayfa Gösterge Noktaları
-            Padding(
-              padding: const EdgeInsets.only(top: 2, bottom: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 16,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: AppConstants.primaryColor,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Container(
-                    width: 6,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Container(
-                    width: 6,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ],
+              SizedBox(
+                height: 188,
+                child: snapshot.connectionState == ConnectionState.waiting
+                    ? const Center(
+                        child: CircularProgressIndicator(
+                          color: AppConstants.primaryColor,
+                        ),
+                      )
+                    : snapshot.hasError
+                    ? Center(
+                        child: TextButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _weeklyDealsFuture = _fetchWeeklyDeals();
+                            });
+                          },
+                          icon: const Icon(Icons.refresh),
+                          label: Text(strings.weeklyDealsLoadError),
+                        ),
+                      )
+                    : products.isEmpty
+                    ? Center(
+                        child: Text(
+                          strings.noWeeklyDiscounts,
+                          style: TextStyle(color: Colors.grey.shade600),
+                        ),
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        scrollDirection: Axis.horizontal,
+                        itemCount: products.length,
+                        separatorBuilder: (_, _) => const SizedBox(width: 10),
+                        itemBuilder: (context, index) =>
+                            _buildWeeklyDealProductCard(products[index]),
+                      ),
               ),
-            ),
-          ],
+            ],
+          ),
         );
       },
     );
   }
 
-  Widget _buildFallbackBannerArt() {
-    return Container(
-      height: 95,
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: const Center(
-        child: Icon(
-          Icons.shopping_basket_rounded,
-          size: 52,
-          color: AppConstants.primaryColor,
-        ),
-      ),
+  Widget _buildWeeklyDealProductCard(Product product) {
+    final isFavorite = _favoriteProductIds.contains(product.id);
+
+    return AnimatedBuilder(
+      animation: CartManager(),
+      builder: (context, _) {
+
+        return Container(
+          width: 138,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFE9ECEF)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.05),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: InkWell(
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) =>
+                                ProductDetailScreen(product: product),
+                          ),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(8, 8, 8, 18),
+                          child: Image.network(
+                            product.imageUrl,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, _, _) => const Center(
+                              child: Icon(
+                                Icons.image_not_supported_outlined,
+                                color: Colors.grey,
+                                size: 28,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      top: 4,
+                      right: 4,
+                      child: IconButton(
+                        onPressed: () => _toggleFavorite(product.id),
+                        icon: Icon(
+                          isFavorite
+                              ? Icons.favorite_rounded
+                              : Icons.favorite_border_rounded,
+                          color: isFavorite
+                              ? Colors.red
+                              : Colors.grey.shade500,
+                          size: 17,
+                        ),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 26,
+                          minHeight: 26,
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                    Positioned(
+                      left: 6,
+                      right: 6,
+                      bottom: 0,
+                      child: AddToCartControl(product: product, compact: true),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 6, 8, 7),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      product.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        height: 1.15,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF25282A),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '₺${product.price.toStringAsFixed(2)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF1E2022),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -874,22 +914,34 @@ class _MarketHomePageState extends State<MarketHomePage> {
               child: ListView.builder(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 scrollDirection: Axis.horizontal,
-                itemCount: categories.length + 1, // +1 "Tümü" için
+                itemCount: categories.length + 2, // +1 "Tümü", +1 "Favoriler" için
                 itemBuilder: (context, index) {
                   final isAll = index == 0;
-                  final category = isAll ? null : categories[index - 1];
+                  final isFavorites = index == 1;
+                  final category = (isAll || isFavorites) ? null : categories[index - 2];
                   final isSelected = isAll
                       ? _selectedCategoryId == null
-                      : _selectedCategoryId == category?.id;
+                      : isFavorites
+                          ? _selectedCategoryId == favoritesCategoryId
+                          : _selectedCategoryId == category?.id;
 
-                  final title = isAll ? strings.all : category!.name;
-                  final iconData = _getCategoryIcon(title);
+                  final title = isAll
+                      ? strings.all
+                      : isFavorites
+                          ? strings.favorites
+                          : category!.name;
+                  final iconData = isFavorites
+                      ? Icons.favorite_rounded
+                      : _getCategoryIcon(title);
+                  final iconColor = isFavorites
+                      ? (isSelected ? Colors.red : Colors.redAccent)
+                      : AppConstants.primaryColor;
 
                   return Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 6),
                     child: InkWell(
                       onTap: () {
-                        _selectCategory(category?.id);
+                        _selectCategory(isFavorites ? favoritesCategoryId : category?.id);
                       },
                       borderRadius: BorderRadius.circular(35),
                       child: Column(
@@ -900,13 +952,19 @@ class _MarketHomePageState extends State<MarketHomePage> {
                             height: 64,
                             decoration: BoxDecoration(
                               color: isSelected
-                                  ? AppConstants.primaryColor
-                                      .withValues(alpha: 0.18)
-                                  : const Color(0xFFE8F6ED),
+                                  ? (isFavorites
+                                      ? Colors.red.withValues(alpha: 0.15)
+                                      : AppConstants.primaryColor
+                                          .withValues(alpha: 0.18))
+                                  : (isFavorites
+                                      ? const Color(0xFFFFECEF)
+                                      : const Color(0xFFE8F6ED)),
                               shape: BoxShape.circle,
                               border: isSelected
                                   ? Border.all(
-                                      color: AppConstants.primaryColor,
+                                      color: isFavorites
+                                          ? Colors.red
+                                          : AppConstants.primaryColor,
                                       width: 2,
                                     )
                                   : null,
@@ -914,7 +972,7 @@ class _MarketHomePageState extends State<MarketHomePage> {
                             child: Icon(
                               iconData,
                               size: 28,
-                              color: AppConstants.primaryColor,
+                              color: iconColor,
                             ),
                           ),
                           const SizedBox(height: 6),
@@ -931,7 +989,9 @@ class _MarketHomePageState extends State<MarketHomePage> {
                                     ? FontWeight.bold
                                     : FontWeight.w500,
                                 color: isSelected
-                                    ? AppConstants.primaryColor
+                                    ? (isFavorites
+                                        ? Colors.red
+                                        : AppConstants.primaryColor)
                                     : const Color(0xFF2B2D42),
                               ),
                             ),
@@ -980,15 +1040,19 @@ class _MarketHomePageState extends State<MarketHomePage> {
 
   // Popüler Ürünler Başlık Satırı
   Widget _buildProductsHeader(AppStrings strings) {
+    final title = _selectedCategoryId == favoritesCategoryId
+        ? strings.favorites
+        : _selectedCategoryId != null
+            ? strings.categories
+            : strings.popularProducts;
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(
-            _selectedCategoryId != null
-                ? strings.categories
-                : strings.popularProducts,
+            title,
             style: const TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w800,
@@ -1079,13 +1143,28 @@ class _MarketHomePageState extends State<MarketHomePage> {
               }).toList();
 
         if (filtered.isEmpty) {
+          final isFavorites = _selectedCategoryId == favoritesCategoryId;
           return SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.all(48),
               child: Center(
-                child: Text(
-                  strings.noSearchResults,
-                  style: TextStyle(color: Colors.grey.shade600),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (isFavorites) ...[
+                      const Icon(
+                        Icons.favorite_border_rounded,
+                        size: 48,
+                        color: Colors.grey,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    Text(
+                      isFavorites ? strings.noFavorites : strings.noSearchResults,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey.shade600),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1114,10 +1193,8 @@ class _MarketHomePageState extends State<MarketHomePage> {
     );
   }
 
-  // Modern Ürün Kartı (Ekrandakiyle Birebir Tasarım)
   Widget _buildModernProductCard(Product product) {
     final isFavorite = _favoriteProductIds.contains(product.id);
-    final inCartQty = CartManager().quantityFor(product.id);
 
     return Container(
       decoration: BoxDecoration(
@@ -1135,7 +1212,6 @@ class _MarketHomePageState extends State<MarketHomePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 1. Kartın Üstü: Kalp (Favori) İkonu
           Align(
             alignment: Alignment.topRight,
             child: IconButton(
@@ -1148,52 +1224,52 @@ class _MarketHomePageState extends State<MarketHomePage> {
                     : Icons.favorite_border_rounded,
                 color: isFavorite ? Colors.red : Colors.grey.shade400,
               ),
-              onPressed: () {
-                setState(() {
-                  if (isFavorite) {
-                    _favoriteProductIds.remove(product.id);
-                  } else {
-                    _favoriteProductIds.add(product.id);
-                  }
-                });
-              },
+              onPressed: () => _toggleFavorite(product.id),
             ),
           ),
-
-          // 2. Ürün Fotoğrafı
           Expanded(
-            child: InkWell(
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => ProductDetailScreen(product: product),
-                ),
-              ).then((_) => setState(() {})),
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Image.network(
-                    product.imageUrl,
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, _, _) => const Icon(
-                      Icons.image_not_supported_outlined,
-                      size: 40,
-                      color: Colors.grey,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: InkWell(
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            ProductDetailScreen(product: product),
+                      ),
+                    ).then((_) => setState(() {})),
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 0, 8, 22),
+                        child: Image.network(
+                          product.imageUrl,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, _, _) => const Icon(
+                            Icons.image_not_supported_outlined,
+                            size: 40,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
+                Positioned(
+                  left: 10,
+                  right: 10,
+                  bottom: 0,
+                  child: AddToCartControl(product: product),
+                ),
+              ],
             ),
           ),
-
-          // 3. Ürün Bilgileri ve Fiyat / Sepet Butonu
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                // İsim
                 Text(
                   product.title,
                   maxLines: 1,
@@ -1205,8 +1281,6 @@ class _MarketHomePageState extends State<MarketHomePage> {
                   ),
                 ),
                 const SizedBox(height: 2),
-
-                // Birim (ör: "1 kg", "1 adet" veya açıklama)
                 Text(
                   product.description.isNotEmpty
                       ? product.description
@@ -1219,87 +1293,14 @@ class _MarketHomePageState extends State<MarketHomePage> {
                     color: Colors.grey.shade500,
                   ),
                 ),
-                const SizedBox(height: 8),
-
-                // Fiyat ve Sepete Ekle Butonu
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      '₺${product.price.toStringAsFixed(2)}',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                        color: AppConstants.primaryColor,
-                      ),
-                    ),
-
-                    // Yeşil Yuvarlak Sepet Butonu
-                    InkWell(
-                      onTap: product.stock <= 0
-                          ? null
-                          : () {
-                              CartManager().addItem(product);
-                              setState(() {});
-                              ScaffoldMessenger.of(context)
-                                ..hideCurrentSnackBar()
-                                ..showSnackBar(
-                                  SnackBar(
-                                    content: Text('${product.title} sepete eklendi!'),
-                                    duration: const Duration(seconds: 1),
-                                    behavior: SnackBarBehavior.floating,
-                                    backgroundColor: AppConstants.primaryColor,
-                                  ),
-                                );
-                            },
-                      borderRadius: BorderRadius.circular(10),
-                      child: Container(
-                        width: 36,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          color: product.stock > 0
-                              ? AppConstants.primaryColor
-                              : Colors.grey.shade400,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            const Icon(
-                              Icons.shopping_cart_outlined,
-                              color: Colors.white,
-                              size: 18,
-                            ),
-                            if (inCartQty > 0)
-                              Positioned(
-                                top: 2,
-                                right: 2,
-                                child: Container(
-                                  padding: const EdgeInsets.all(2),
-                                  decoration: const BoxDecoration(
-                                    color: Colors.amber,
-                                    shape: BoxShape.circle,
-                                  ),
-                                  constraints: const BoxConstraints(
-                                    minWidth: 12,
-                                    minHeight: 12,
-                                  ),
-                                  child: Text(
-                                    '$inCartQty',
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      color: Colors.black,
-                                      fontSize: 8,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
+                const SizedBox(height: 6),
+                Text(
+                  '₺${product.price.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                    color: AppConstants.primaryColor,
+                  ),
                 ),
               ],
             ),
@@ -1347,15 +1348,29 @@ class _MarketHomePageState extends State<MarketHomePage> {
                 },
                 child: ListView.separated(
                   padding: const EdgeInsets.all(16),
-                  itemCount: categories.length + 1,
+                  itemCount: categories.length + 2, // +1 "Tümü", +1 "Favoriler"
                   separatorBuilder: (_, _) => const SizedBox(height: 8),
                   itemBuilder: (context, index) {
                     final isAll = index == 0;
-                    final category = isAll ? null : categories[index - 1];
-                    final title = isAll ? strings.all : category!.name;
+                    final isFavorites = index == 1;
+                    final category = (isAll || isFavorites) ? null : categories[index - 2];
+                    final title = isAll
+                        ? strings.all
+                        : isFavorites
+                            ? strings.favorites
+                            : category!.name;
                     final isSelected = isAll
                         ? _selectedCategoryId == null
-                        : _selectedCategoryId == category?.id;
+                        : isFavorites
+                            ? _selectedCategoryId == favoritesCategoryId
+                            : _selectedCategoryId == category?.id;
+
+                    final iconData = isFavorites
+                        ? Icons.favorite_rounded
+                        : _getCategoryIcon(title);
+                    final iconColor = isFavorites
+                        ? Colors.red
+                        : AppConstants.primaryColor;
 
                     return Card(
                       elevation: 0,
@@ -1363,20 +1378,24 @@ class _MarketHomePageState extends State<MarketHomePage> {
                         borderRadius: BorderRadius.circular(14),
                         side: BorderSide(
                           color: isSelected
-                              ? AppConstants.primaryColor
+                              ? (isFavorites ? Colors.red : AppConstants.primaryColor)
                               : const Color(0xFFEEF0F2),
                           width: isSelected ? 2 : 1,
                         ),
                       ),
                       color: isSelected
-                          ? AppConstants.primaryColor.withValues(alpha: 0.08)
+                          ? (isFavorites
+                              ? Colors.red.withValues(alpha: 0.08)
+                              : AppConstants.primaryColor.withValues(alpha: 0.08))
                           : Colors.white,
                       child: ListTile(
                         leading: CircleAvatar(
-                          backgroundColor: const Color(0xFFE8F6ED),
+                          backgroundColor: isFavorites
+                              ? const Color(0xFFFFECEF)
+                              : const Color(0xFFE8F6ED),
                           child: Icon(
-                            _getCategoryIcon(title),
-                            color: AppConstants.primaryColor,
+                            iconData,
+                            color: iconColor,
                             size: 22,
                           ),
                         ),
@@ -1387,7 +1406,7 @@ class _MarketHomePageState extends State<MarketHomePage> {
                                 ? FontWeight.bold
                                 : FontWeight.w600,
                             color: isSelected
-                                ? AppConstants.primaryColor
+                                ? (isFavorites ? Colors.red : AppConstants.primaryColor)
                                 : const Color(0xFF1E2022),
                           ),
                         ),
@@ -1396,7 +1415,7 @@ class _MarketHomePageState extends State<MarketHomePage> {
                           color: Colors.grey,
                         ),
                         onTap: () {
-                          _selectCategory(category?.id);
+                          _selectCategory(isFavorites ? favoritesCategoryId : category?.id);
                           setState(() => _selectedTab = 0);
                         },
                       ),

@@ -16,6 +16,7 @@
         <a href="{{ url_for('admin_dashboard') }}">Dashboard</a>
         <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
         <a href="{{ url_for('admin_campaigns') }}">Kampanyalar</a>
+        <a href="{{ url_for('admin_weekly_deals') }}">Haftanın İndirimleri</a>
         <a href="{{ url_for('admin_orders') }}">Siparişler</a>
         <a href="/">Mağazayı Gör</a>
         <a href="{{ url_for('admin_logout') }}">Çıkış</a>
@@ -69,6 +70,13 @@
                 Stok adedi
                 <input type="number" name="stock" min="0" step="1" placeholder="0" required>
             </label>
+            <label class="full-width checkbox-field">
+                <span>
+                    <input type="checkbox" name="minimum_order_exempt">
+                    Minimum sepet hesabına dahil etme
+                </span>
+                <small>Sigara ve tütün ürünlerinde işaretleyin. Ürün bedeli sipariş toplamına eklenmeye devam eder.</small>
+            </label>
             <label class="full-width">
                 Açıklama
                 <textarea name="description" rows="3" placeholder="Ürün açıklaması"></textarea>
@@ -99,6 +107,7 @@
                         <th>Kategori</th>
                         <th>Fiyat</th>
                         <th>Stok</th>
+                        <th>Minimum sepet</th>
                         <th>Durum</th>
                         <th>İşlem</th>
                     </tr>
@@ -120,6 +129,7 @@
                         <td>{{ product.category or 'Kategorisiz' }}</td>
                         <td>{{ '%.2f'|format(product.price) }} TL</td>
                         <td>{{ product.stock }}</td>
+                        <td>{% if product.minimum_order_exempt %}Hariç{% else %}Dahil{% endif %}</td>
                         <td><span class="badge {% if product.active %}badge-success{% else %}badge-muted{% endif %}">{% if product.active %}Yayında{% else %}Pasif{% endif %}</span></td>
                         <td class="actions-cell">
                             <a class="table-action" href="{{ url_for('admin_edit_product', product_id=product.id) }}">Düzenle</a>
@@ -130,7 +140,7 @@
                         </td>
                     </tr>
                     {% else %}
-                    <tr><td colspan="6" class="empty-cell">Henüz ürün eklenmemiş.</td></tr>
+                    <tr><td colspan="7" class="empty-cell">Henüz ürün eklenmemiş.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>

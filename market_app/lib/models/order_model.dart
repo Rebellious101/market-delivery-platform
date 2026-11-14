@@ -25,12 +25,14 @@ class OrderModel {
   final List<OrderItemModel> items;
   final double totalPrice;
   final String paymentMethod; // 'Nakit' veya 'Banka / Kredi Kartı'
+  final String? phone;
 
   OrderModel({
     required this.address,
     required this.items,
     required this.totalPrice,
     required this.paymentMethod,
+    this.phone,
   });
 
   Map<String, dynamic> toJson() => {
@@ -42,5 +44,6 @@ class OrderModel {
     'items': items.map((item) => item.toJson()).toList(),
     'total_price': totalPrice,
     'payment_method': paymentMethod,
+    if (phone != null && phone!.isNotEmpty) 'phone': phone,
   };
 }

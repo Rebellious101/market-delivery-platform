@@ -1,15 +1,16 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../core/constants.dart';
 import '../core/localization.dart';
 import '../core/session_manager.dart';
-import '../models/address_model.dart';
 import '../models/order_model.dart';
-import 'address_book.dart';
 import 'auth_screen.dart';
 import 'cart_manager.dart';
 import 'checkout_screen.dart';
-import 'delivery_address_screen.dart';
 
 class CartScreen extends StatefulWidget {
   const CartScreen({super.key});
@@ -19,20 +20,45 @@ class CartScreen extends StatefulWidget {
 }
 
 class _CartScreenState extends State<CartScreen> {
+  double _minimumOrderAmount = 450;
+  bool _isMinimumOrderSettingsLoaded = false;
+
   @override
   void initState() {
     super.initState();
-    AddressBook.instance.addListener(_onAddressChanged);
+    unawaited(_loadMinimumOrderAmount());
   }
 
-  @override
-  void dispose() {
-    AddressBook.instance.removeListener(_onAddressChanged);
-    super.dispose();
-  }
+  Future<void> _loadMinimumOrderAmount() async {
+    try {
+      final response = await http
+          .get(Uri.parse('${AppConstants.baseUrl}/api/store-settings'))
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode != 200) {
+        throw Exception(
+          'Minimum sepet ayarı yüklenemedi (${response.statusCode}).',
+        );
+      }
 
-  void _onAddressChanged() {
-    if (mounted) setState(() {});
+      final data = jsonDecode(response.body);
+      final amount = data is Map ? data['minimum_order_amount'] : null;
+      if (amount is! num || !amount.isFinite || amount < 0) {
+        throw const FormatException(
+          'Sunucu geçersiz minimum sepet tutarı döndürdü.',
+        );
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _minimumOrderAmount = amount.toDouble();
+        _isMinimumOrderSettingsLoaded = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isMinimumOrderSettingsLoaded = false;
+      });
+    }
   }
 
   Future<void> _proceedToCheckout() async {
@@ -40,9 +66,18 @@ class _CartScreenState extends State<CartScreen> {
     final cartItems = cart.items;
     if (cartItems.isEmpty) return;
 
-    final selectedAddress = AddressBook.instance.selectedAddress;
-    if (selectedAddress == null) {
-      _showErrorSnackBar('Siparişi tamamlamak için teslimat adresi seçin.');
+    if (!_isMinimumOrderSettingsLoaded) {
+      _showErrorSnackBar(
+        AppStrings.of(context).minimumOrderSettingsUnavailable,
+      );
+      return;
+    }
+    if (cart.minimumOrderTotal < _minimumOrderAmount) {
+      final remaining = _minimumOrderAmount - cart.minimumOrderTotal;
+      _showErrorSnackBar(
+        AppStrings.of(context)
+            .minimumOrderRemaining(remaining.toStringAsFixed(2)),
+      );
       return;
     }
 
@@ -57,20 +92,6 @@ class _CartScreenState extends State<CartScreen> {
       }
     }
 
-    final addressModel = AddressModel(
-      id: int.tryParse(selectedAddress.id),
-      title: selectedAddress.title,
-      fullAddress: selectedAddress.fullText,
-      city: selectedAddress.city.isNotEmpty
-          ? selectedAddress.city
-          : 'Gazimağusa',
-      district: selectedAddress.district.isNotEmpty
-          ? selectedAddress.district
-          : 'Gazimağusa',
-      latitude: selectedAddress.latitude,
-      longitude: selectedAddress.longitude,
-    );
-
     final orderItems = cartItems
         .map(
           (item) => OrderItemModel(
@@ -82,13 +103,16 @@ class _CartScreenState extends State<CartScreen> {
         )
         .toList();
 
+    final deliveryFee = AppConstants.deliveryFeeFor(cart.totalPrice);
+    final finalTotal = cart.totalPrice + deliveryFee;
+
     await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => CheckoutScreen(
-          selectedAddress: addressModel,
           cartItems: orderItems,
-          totalPrice: cart.totalPrice,
+          totalPrice: finalTotal,
+          deliveryFee: deliveryFee,
         ),
       ),
     );
@@ -117,10 +141,39 @@ class _CartScreenState extends State<CartScreen> {
     final strings = AppStrings.of(context);
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F7F6),
       appBar: AppBar(
-        title: Text(strings.myCart),
+        title: Text(
+          strings.myCart,
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
         backgroundColor: AppConstants.primaryColor,
         foregroundColor: AppConstants.textLight,
+        elevation: 0,
+        actions: [
+          if (cart.items.isNotEmpty) ...[
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_horiz),
+              tooltip: 'Diğer',
+              onSelected: (value) {
+                if (value == 'continue') Navigator.pop(context);
+                if (value == 'clear') _confirmClearCart();
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(
+                  value: 'continue',
+                  child: Text('Alışverişe devam et'),
+                ),
+                PopupMenuItem(value: 'clear', child: Text('Sepeti boşalt')),
+              ],
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Sepeti boşalt',
+              onPressed: _confirmClearCart,
+            ),
+          ],
+        ],
       ),
       body: cart.items.isEmpty
           ? Center(
@@ -206,421 +259,443 @@ class _CartScreenState extends State<CartScreen> {
             )
           : Column(
               children: [
-                _buildAddressSelector(),
                 Expanded(
-                  child: ListView.builder(
-                    itemCount: cart.items.length,
-                    itemBuilder: (context, index) {
-                      final item = cart.items[index];
-                      return Card(
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.network(
-                                  item.product.imageUrl,
-                                  width: 72,
-                                  height: 72,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) =>
-                                      const SizedBox(
-                                        width: 72,
-                                        height: 72,
-                                        child: Icon(Icons.image_not_supported),
-                                      ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      item.product.title,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      '${item.product.price.toStringAsFixed(2)} TL',
-                                      style: const TextStyle(
-                                        color: AppConstants.primaryColor,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      'Stok: ${item.product.stock}',
-                                      style: const TextStyle(
-                                        color: AppConstants.textSecondary,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Row(
-                                      children: [
-                                        _QuantityButton(
-                                          icon: Icons.remove,
-                                          tooltip: 'Miktarı azalt',
-                                          onPressed: () {
-                                            setState(() {
-                                              cart.decreaseQuantity(
-                                                item.product.id,
-                                              );
-                                            });
-                                          },
-                                        ),
-                                        Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 14,
-                                          ),
-                                          child: Text(
-                                            '${item.quantity}',
-                                            style: const TextStyle(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                        _QuantityButton(
-                                          icon: Icons.add,
-                                          tooltip: 'Miktarı artır',
-                                          onPressed:
-                                              item.quantity >=
-                                                  item.product.stock
-                                              ? null
-                                              : () {
-                                                  setState(() {
-                                                    cart.increaseQuantity(
-                                                      item.product.id,
-                                                    );
-                                                  });
-                                                },
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.delete_outline),
-                                color: AppConstants.errorColor,
-                                tooltip: 'Ürünü kaldır',
-                                onPressed: () {
-                                  setState(() {
-                                    cart.removeItem(item.product.id);
-                                  });
-                                },
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.grey.withValues(alpha: 0.2),
-                        spreadRadius: 1,
-                        blurRadius: 5,
-                        offset: const Offset(0, -3),
-                      ),
-                    ],
-                  ),
-                  child: Column(
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
                     children: [
-                      _buildDeliveryProgress(strings, cart.totalPrice),
-                      const SizedBox(height: 12),
-                      _buildPriceRow(
-                        strings.subtotal,
-                        '${cart.totalPrice.toStringAsFixed(2)} TL',
-                      ),
-                      const SizedBox(height: 6),
-                      _buildPriceRow(
-                        strings.deliveryFeeLabel,
-                        AppConstants.deliveryFeeFor(cart.totalPrice) == 0
-                            ? strings.free
-                            : '${AppConstants.deliveryFeeFor(cart.totalPrice).toStringAsFixed(2)} TL',
-                        valueColor:
-                            AppConstants.deliveryFeeFor(cart.totalPrice) == 0
-                            ? AppConstants.primaryColor
-                            : null,
-                      ),
-                      const Divider(height: 20),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            strings.total,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            '${(cart.totalPrice + AppConstants.deliveryFeeFor(cart.totalPrice)).toStringAsFixed(2)} TL',
-                            style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: AppConstants.primaryColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 15),
-                      SizedBox(
-                        width: double.infinity,
-                        height: AppConstants.buttonHeight,
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppConstants.primaryColor,
-                            foregroundColor: AppConstants.textLight,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(
-                                AppConstants.defaultRadius,
-                              ),
-                            ),
-                          ),
-                          onPressed: _proceedToCheckout,
-                          child: Text(
-                            strings.completeOrder,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 4, bottom: 12),
+                        child: Text(
+                          '${cart.items.length} Ürün',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AppConstants.textSecondary,
                           ),
                         ),
                       ),
+                      for (final item in cart.items)
+                        _CartItemCard(
+                          item: item,
+                          exemptLabel: strings.minimumOrderExcludedProduct,
+                          onDecrease: () => setState(
+                            () => cart.decreaseQuantity(item.product.id),
+                          ),
+                          onIncrease: item.quantity >= item.product.stock
+                              ? null
+                              : () => setState(
+                                  () => cart.increaseQuantity(item.product.id),
+                                ),
+                          onRemove: () => setState(
+                            () => cart.removeItem(item.product.id),
+                          ),
+                        ),
                     ],
                   ),
                 ),
+                _buildSummarySheet(strings, cart),
               ],
             ),
     );
   }
 
-  Widget _buildPriceRow(String label, String value, {Color? valueColor}) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(color: AppConstants.textSecondary),
+  Future<void> _confirmClearCart() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sepeti boşalt'),
+        content: const Text(
+          'Sepetinizdeki tüm ürünler kaldırılacak. Emin misiniz?',
         ),
-        Text(
-          value,
-          style: TextStyle(fontWeight: FontWeight.w600, color: valueColor),
-        ),
-      ],
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Vazgeç'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppConstants.errorColor,
+            ),
+            child: const Text('Boşalt'),
+          ),
+        ],
+      ),
     );
+    if (confirmed == true && mounted) {
+      setState(() => CartManager().clear());
+    }
   }
 
-  Widget _buildDeliveryProgress(AppStrings strings, double subtotal) {
-    final threshold = AppConstants.freeDeliveryThreshold;
-    final remaining = threshold - subtotal;
-    final unlocked = remaining <= 0;
-    final progress = (subtotal / threshold).clamp(0.0, 1.0);
+  Widget _buildSummarySheet(AppStrings strings, CartManager cart) {
+    final subtotal = cart.totalPrice;
+    final fee = AppConstants.deliveryFeeFor(subtotal);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 16,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              unlocked ? Icons.check_circle : Icons.local_shipping_outlined,
-              size: 18,
-              color: unlocked
-                  ? AppConstants.primaryColor
-                  : AppConstants.secondaryColor,
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                unlocked
-                    ? strings.freeDeliveryUnlocked
-                    : strings.freeDeliveryRemaining(
-                        remaining.toStringAsFixed(2),
-                      ),
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
+            const SizedBox(height: 16),
+            _buildPriceRow(
+              strings.subtotal,
+              '${subtotal.toStringAsFixed(2)} TL',
+            ),
+            const SizedBox(height: 10),
+            _buildPriceRow(
+              strings.deliveryFeeLabel,
+              fee == 0 ? strings.free : '${fee.toStringAsFixed(2)} TL',
+              valueColor: fee == 0 ? AppConstants.primaryColor : null,
+              info:
+                  '${AppConstants.freeDeliveryThreshold.toStringAsFixed(0)} TL '
+                  've üzeri siparişlerde gönderim ücretsizdir.',
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 14),
+              child: _DashedDivider(),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  strings.total,
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    color: AppConstants.textPrimary,
+                  ),
+                ),
+                Text(
+                  '${(subtotal + fee).toStringAsFixed(2)} TL',
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                    color: AppConstants.primaryColor,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              height: 54,
+              child: FilledButton(
+                onPressed: _proceedToCheckout,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppConstants.primaryColor,
+                  foregroundColor: AppConstants.textLight,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                child: Text(
+                  strings.completeOrder,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: LinearProgressIndicator(
-            value: progress,
-            minHeight: 6,
-            backgroundColor: Colors.grey.shade200,
-            color: unlocked
-                ? AppConstants.primaryColor
-                : AppConstants.secondaryColor,
+      ),
+    );
+  }
+
+  Widget _buildPriceRow(
+    String label,
+    String value, {
+    Color? valueColor,
+    String? info,
+  }) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Row(
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                color: AppConstants.textSecondary,
+                fontSize: 14,
+              ),
+            ),
+            if (info != null) ...[
+              const SizedBox(width: 4),
+              Tooltip(
+                message: info,
+                triggerMode: TooltipTriggerMode.tap,
+                child: const Icon(
+                  Icons.info_outline,
+                  size: 14,
+                  color: AppConstants.textSecondary,
+                ),
+              ),
+            ],
+          ],
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
+            color: valueColor ?? AppConstants.textPrimary,
           ),
         ),
       ],
     );
   }
+}
 
-  Widget _buildAddressSelector() {
-    final addressBook = AddressBook.instance;
-    final selectedAddress = addressBook.selectedAddress;
-    final strings = AppStrings.of(context);
+class _CartItemCard extends StatelessWidget {
+  const _CartItemCard({
+    required this.item,
+    required this.exemptLabel,
+    required this.onDecrease,
+    required this.onIncrease,
+    required this.onRemove,
+  });
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-      child: Card(
-        margin: EdgeInsets.zero,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    strings.delivery,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  TextButton.icon(
-                    onPressed: _addNewAddress,
-                    icon: const Icon(Icons.add, size: 18),
-                    label: Text(strings.newAddress),
-                  ),
-                ],
+  final CartItem item;
+  final String exemptLabel;
+  final VoidCallback onDecrease;
+  final VoidCallback? onIncrease;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final product = item.product;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFECEFF1)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            width: 82,
+            height: 82,
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFEDF1EE), width: 1.2),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Image.network(
+                product.imageUrl,
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) => const Icon(
+                  Icons.image_not_supported_outlined,
+                  color: AppConstants.textSecondary,
+                ),
               ),
-              if (addressBook.addresses.isEmpty)
-                Text(
-                  strings.selectAddress,
-                  style: const TextStyle(color: AppConstants.textSecondary),
-                )
-              else
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(
-                      child: DropdownButtonFormField<String>(
-                        key: ValueKey(selectedAddress?.id),
-                        initialValue: selectedAddress?.id,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          prefixIcon: Icon(Icons.location_on_outlined),
-                          border: OutlineInputBorder(),
-                          isDense: true,
+                      child: Text(
+                        product.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w700,
+                          color: AppConstants.textPrimary,
                         ),
-                        items: addressBook.addresses
-                            .map(
-                              (address) => DropdownMenuItem<String>(
-                                value: address.id,
-                                child: Text(
-                                  '${address.title} - ${address.fullText}',
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (id) {
-                          if (id != null) addressBook.select(id);
-                        },
                       ),
                     ),
-                    if (selectedAddress != null) ...[
-                      const SizedBox(width: 6),
-                      IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        color: AppConstants.errorColor,
-                        tooltip: 'Seçili adresi sil',
-                        onPressed: () => _confirmDeleteAddress(selectedAddress),
+                    const SizedBox(width: 6),
+                    InkWell(
+                      onTap: onRemove,
+                      borderRadius: BorderRadius.circular(8),
+                      child: const Padding(
+                        padding: EdgeInsets.all(2),
+                        child: Icon(
+                          Icons.delete_outline,
+                          size: 20,
+                          color: Color(0xFFE53935),
+                        ),
                       ),
-                    ],
+                    ),
                   ],
                 ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _confirmDeleteAddress(Address address) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Adresi Sil'),
-        content: Text(
-          '"${address.title}" başlıklı kayıtlı adresi silmek istediğinize emin misiniz?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('İptal'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: AppConstants.errorColor,
+                const SizedBox(height: 3),
+                Text(
+                  product.stock > 0
+                      ? 'Stokta var (${product.stock} adet)'
+                      : 'Stokta yok',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF78909C),
+                  ),
+                ),
+                if (product.minimumOrderExempt) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    exemptLabel,
+                    style: const TextStyle(
+                      color: AppConstants.textSecondary,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '${product.price.toStringAsFixed(2)} TL',
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        color: AppConstants.primaryColor,
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF3F6F4),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(color: const Color(0xFFE3E9E5)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _PillCircleButton(
+                            icon: Icons.remove,
+                            backgroundColor: Colors.white,
+                            iconColor: AppConstants.textPrimary,
+                            onTap: onDecrease,
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Text(
+                              '${item.quantity}',
+                              style: const TextStyle(
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w700,
+                                color: AppConstants.textPrimary,
+                              ),
+                            ),
+                          ),
+                          _PillCircleButton(
+                            icon: Icons.add,
+                            backgroundColor: const Color(0xFFDDF2E3),
+                            iconColor: AppConstants.primaryColor,
+                            onTap: onIncrease,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Sil'),
           ),
         ],
       ),
     );
-
-    if (confirmed == true && mounted) {
-      await AddressBook.instance.deleteAddress(context, address.id);
-    }
-  }
-
-  Future<void> _addNewAddress() async {
-    final address = await Navigator.push<Address>(
-      context,
-      MaterialPageRoute(builder: (_) => const DeliveryAddressScreen()),
-    );
-    if (address != null) AddressBook.instance.add(address);
   }
 }
 
-class _QuantityButton extends StatelessWidget {
-  const _QuantityButton({
+class _PillCircleButton extends StatelessWidget {
+  const _PillCircleButton({
     required this.icon,
-    required this.tooltip,
-    required this.onPressed,
+    required this.backgroundColor,
+    required this.iconColor,
+    required this.onTap,
   });
 
   final IconData icon;
-  final String tooltip;
-  final VoidCallback? onPressed;
+  final Color backgroundColor;
+  final Color iconColor;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 36,
-      height: 36,
-      child: IconButton.filledTonal(
-        onPressed: onPressed,
-        icon: Icon(icon, size: 18),
-        tooltip: tooltip,
-        padding: EdgeInsets.zero,
-        visualDensity: VisualDensity.compact,
+    final disabled = onTap == null;
+    return Material(
+      color: disabled ? Colors.grey.shade200 : backgroundColor,
+      shape: const CircleBorder(),
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: SizedBox(
+          width: 30,
+          height: 30,
+          child: Icon(
+            icon,
+            size: 16,
+            color: disabled ? Colors.grey.shade400 : iconColor,
+          ),
+        ),
       ),
+    );
+  }
+}
+
+class _DashedDivider extends StatelessWidget {
+  const _DashedDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final dashCount = (constraints.constrainWidth() / 8).floor();
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: List.generate(
+            dashCount,
+            (_) => Container(
+              width: 4,
+              height: 1,
+              color: const Color(0xFFD5DCE0),
+            ),
+          ),
+        );
+      },
     );
   }
 }

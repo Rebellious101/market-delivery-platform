@@ -23,11 +23,12 @@ class AppStrings {
   bool get isEnglish => locale.languageCode == 'en';
 
   static AppStrings of(BuildContext context) {
+    Localizations.maybeLocaleOf(context);
     final language = AppLanguage.instance;
     return AppStrings(language.locale);
   }
 
-  String get appName => 'Market App';
+  String get appName => 'Prestij Market';
   String get home => isEnglish ? 'Home' : 'Ana Sayfa';
   String get categories => isEnglish ? 'Categories' : 'Kategoriler';
   String get cart => isEnglish ? 'Cart' : 'Sepet';
@@ -69,14 +70,35 @@ class AppStrings {
   String get completeOrder => isEnglish ? 'Complete order' : 'Siparişi Tamamla';
   String get total => isEnglish ? 'Total:' : 'Toplam Tutar:';
   String get subtotal => isEnglish ? 'Subtotal:' : 'Ara Toplam:';
-  String get deliveryFeeLabel => isEnglish ? 'Delivery fee:' : 'Gönderim Ücreti:';
+  String get deliveryFeeLabel =>
+      isEnglish ? 'Delivery fee:' : 'Gönderim Ücreti:';
+  String get minimumOrderTitle =>
+      isEnglish ? 'Minimum order subtotal' : 'Minimum sepet tutarı';
+  String get minimumOrderExemptNote => isEnglish
+      ? 'Cigarettes and tobacco do not count toward the minimum.'
+      : 'Sigara ve tütün ürünleri minimum tutara dahil değildir.';
+  String get minimumOrderMet => isEnglish
+      ? 'Minimum order amount reached.'
+      : 'Minimum sepet tutarına ulaştınız.';
+  String minimumOrderRemaining(String amount) => isEnglish
+      ? 'Add $amount TL more in eligible products.'
+      : 'Minimum tutara dahil ürünlerden $amount TL daha ekleyin.';
+  String get minimumOrderSettingsUnavailable => isEnglish
+      ? 'Minimum order settings could not be loaded.'
+      : 'Minimum sepet ayarı yüklenemedi.';
+  String get loadingMinimumOrderSettings => isEnglish
+      ? 'Loading minimum order settings...'
+      : 'Minimum sepet ayarı yükleniyor...';
+  String get retry => isEnglish ? 'Retry' : 'Tekrar dene';
+  String get minimumOrderExcludedProduct => isEnglish
+      ? 'Excluded from minimum order subtotal'
+      : 'Minimum sepet hesabına dahil değil';
   String get free => isEnglish ? 'Free' : 'Ücretsiz';
   String freeDeliveryRemaining(String amount) => isEnglish
       ? 'Add $amount TL more for free delivery!'
       : 'Ücretsiz gönderim için $amount TL daha ekleyin!';
-  String get freeDeliveryUnlocked => isEnglish
-      ? 'Free delivery unlocked!'
-      : 'Tebrikler, gönderim ücretsiz!';
+  String get freeDeliveryUnlocked =>
+      isEnglish ? 'Free delivery unlocked!' : 'Tebrikler, gönderim ücretsiz!';
   String get deliveryInfoTitle =>
       isEnglish ? 'Delivery Information' : 'Gönderim Bilgilendirmesi';
   String deliveryInfoBody(String threshold, String fee) => isEnglish
@@ -104,14 +126,25 @@ class AppStrings {
       isEnglish ? 'Popular Products' : 'Popüler Ürünler';
   String get viewAll => isEnglish ? 'View All >' : 'Tümünü Gör >';
   String get selectLocation => isEnglish ? 'Select location' : 'Konum seçin';
-  String get searchHint =>
-      isEnglish ? 'Search products or categories...' : 'Ürün veya kategori ara...';
+  String get searchHint => isEnglish
+      ? 'Search products or categories...'
+      : 'Ürün veya kategori ara...';
   String get weeklyDeals => isEnglish ? 'Weekly Deals' : 'Haftanın Fırsatları';
+  String get weeklyDiscounts =>
+      isEnglish ? 'Weekly Discounts' : 'Haftanın İndirimleri';
+  String get noWeeklyDiscounts =>
+      isEnglish
+          ? 'No products have been selected for weekly deals yet.'
+          : 'Haftanın indirimleri için henüz ürün seçilmedi.';
+  String get weeklyDealsLoadError => isEnglish
+      ? 'Could not load weekly deals. Tap to retry.'
+      : 'İndirimler yüklenemedi. Yeniden denemek için dokunun.';
   String get freshDiscounts => isEnglish
       ? 'Special discounts on fresh items!'
       : 'Taze ürünlerde özel indirimler!';
   String get exploreNow => isEnglish ? 'Explore now >' : 'Şimdi keşfet >';
-  String get upToDiscount => isEnglish ? 'Up to 50% off' : "%50'ye varan indirim";
+  String get upToDiscount =>
+      isEnglish ? 'Up to 50% off' : "%50'ye varan indirim";
   String get myOrders => isEnglish ? 'Order History' : 'Sipariş Geçmişim';
   String get savedAddresses =>
       isEnglish ? 'Saved Addresses' : 'Kayıtlı Adreslerim';
@@ -120,4 +153,8 @@ class AppStrings {
   String get notifications => isEnglish ? 'Notifications' : 'Bildirimler';
   String get noNotifications =>
       isEnglish ? 'No notifications yet' : 'Henüz yeni bildiriminiz yok';
+  String get favorites => isEnglish ? 'Favorites' : 'Favoriler';
+  String get noFavorites => isEnglish
+      ? 'You have not added any favorite products yet.'
+      : 'Henüz favori ürün eklemediniz.';
 }
