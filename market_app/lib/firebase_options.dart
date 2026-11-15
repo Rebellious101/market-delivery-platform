@@ -63,13 +63,14 @@ class DefaultFirebaseOptions {
     projectId: 'my-delivery-app-832ac',
     storageBucket: 'my-delivery-app-832ac.firebasestorage.app',
   );
-
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyAd8OYzSK6npMUCjBVc11HH9Eqz2Rkh6VM',
     appId: '1:28023880651:ios:434667f73e8b9345e3d44e',
     messagingSenderId: '28023880651',
     projectId: 'my-delivery-app-832ac',
     storageBucket: 'my-delivery-app-832ac.firebasestorage.app',
+    androidClientId: '28023880651-ahbd7lqrrosmcqtvijcce99rfm7a98dl.apps.googleusercontent.com',
+    iosClientId: '28023880651-fg10bo98bq92m2gsh4miulffqjadrcai.apps.googleusercontent.com',
     iosBundleId: 'com.example.marketApp',
   );
 }

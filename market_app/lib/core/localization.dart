@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 class AppLanguage extends ChangeNotifier {
@@ -12,6 +13,9 @@ class AppLanguage extends ChangeNotifier {
   void setCode(String code) {
     if (code != 'tr' && code != 'en' || code == _code) return;
     _code = code;
+    try {
+      FirebaseAuth.instance.setLanguageCode(_code);
+    } catch (_) {}
     notifyListeners();
   }
 }
