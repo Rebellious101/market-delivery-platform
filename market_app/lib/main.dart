@@ -133,6 +133,7 @@ class _MarketHomePageState extends State<MarketHomePage> {
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _productRequestController =
       TextEditingController();
+  bool _isProductRequestOpen = false;
   bool _isSubmittingRequest = false;
   Timer? _searchDebounce;
   final Set<int> _favoriteProductIds = {};
@@ -1671,9 +1672,7 @@ class _MarketHomePageState extends State<MarketHomePage> {
               title: strings.notifications,
               onTap: () => _showNotificationsSheet(context),
             ),
-
-            const SizedBox(height: 16),
-            _buildProductRequestCard(strings),
+            _buildProductRequestSection(strings),
 
             if (isAuthenticated) ...[
               const SizedBox(height: 12),
@@ -1735,6 +1734,7 @@ class _MarketHomePageState extends State<MarketHomePage> {
       if (response.statusCode == 201 || response.statusCode == 200) {
         _productRequestController.clear();
         FocusScope.of(context).unfocus();
+        setState(() => _isProductRequestOpen = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(strings.productRequestSuccess),
@@ -1766,123 +1766,133 @@ class _MarketHomePageState extends State<MarketHomePage> {
     }
   }
 
-  Widget _buildProductRequestCard(AppStrings strings) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF7FAF8),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE3EDE6)),
+  Widget _buildProductRequestSection(AppStrings strings) {
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(
+          color: _isProductRequestOpen
+              ? AppConstants.primaryColor.withValues(alpha: 0.4)
+              : const Color(0xFFF0F1F3),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppConstants.primaryColor.withValues(alpha: 0.12),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.add_shopping_cart_rounded,
-                  color: AppConstants.primaryColor,
-                  size: 20,
-                ),
+          ListTile(
+            leading: const Icon(
+              Icons.add_shopping_cart_rounded,
+              color: AppConstants.primaryColor,
+            ),
+            title: Text(
+              strings.productRequestTitle,
+              style: const TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+                color: Color(0xFF1E2022),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      strings.productRequestTitle,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF1E2022),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      strings.productRequestSubtitle,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _productRequestController,
-            maxLength: 30,
-            textInputAction: TextInputAction.send,
-            onSubmitted: (_) {
-              if (!_isSubmittingRequest) {
-                _submitProductRequest(strings);
-              }
+            ),
+            trailing: Icon(
+              _isProductRequestOpen
+                  ? Icons.keyboard_arrow_up_rounded
+                  : Icons.chevron_right,
+              color: Colors.grey,
+              size: 20,
+            ),
+            onTap: () {
+              setState(() {
+                _isProductRequestOpen = !_isProductRequestOpen;
+              });
             },
-            decoration: InputDecoration(
-              hintText: strings.productRequestHint,
-              hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade500),
-              filled: true,
-              fillColor: Colors.white,
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 14,
-                vertical: 12,
-              ),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Color(0xFFDDE2E6)),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Color(0xFFDDE2E6)),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(
-                  color: AppConstants.primaryColor,
-                  width: 1.5,
-                ),
-              ),
-            ),
           ),
-          const SizedBox(height: 6),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: _isSubmittingRequest
-                  ? null
-                  : () => _submitProductRequest(strings),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppConstants.primaryColor,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              icon: _isSubmittingRequest
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
+          if (_isProductRequestOpen)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    strings.productRequestSubtitle,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _productRequestController,
+                    autofocus: true,
+                    maxLength: 30,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) {
+                      if (!_isSubmittingRequest) {
+                        _submitProductRequest(strings);
+                      }
+                    },
+                    decoration: InputDecoration(
+                      hintText: strings.productRequestHint,
+                      hintStyle: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade500,
                       ),
-                    )
-                  : const Icon(Icons.send_rounded, size: 18),
-              label: Text(
-                strings.productRequestSubmit,
-                style: const TextStyle(fontWeight: FontWeight.bold),
+                      filled: true,
+                      fillColor: const Color(0xFFF7FAF8),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Color(0xFFDDE2E6)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Color(0xFFDDE2E6)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                          color: AppConstants.primaryColor,
+                          width: 1.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _isSubmittingRequest
+                          ? null
+                          : () => _submitProductRequest(strings),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppConstants.primaryColor,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      icon: _isSubmittingRequest
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.send_rounded, size: 18),
+                      label: Text(
+                        strings.productRequestSubmit,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
         ],
       ),
     );
