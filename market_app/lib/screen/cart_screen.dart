@@ -283,9 +283,17 @@ class _CartScreenState extends State<CartScreen> {
                           ),
                           onIncrease: item.quantity >= item.product.stock
                               ? null
-                              : () => setState(
-                                  () => cart.increaseQuantity(item.product.id),
-                                ),
+                              : () {
+                                  final ok = cart.increaseQuantity(
+                                    item.product.id,
+                                  );
+                                  if (!ok && item.product.isTobacco) {
+                                    _showErrorSnackBar(
+                                      strings.tobaccoLimitMessage,
+                                    );
+                                  }
+                                  setState(() {});
+                                },
                           onRemove: () => setState(
                             () => cart.removeItem(item.product.id),
                           ),

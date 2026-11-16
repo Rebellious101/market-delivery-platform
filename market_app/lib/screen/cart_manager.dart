@@ -33,10 +33,21 @@ class CartManager extends ChangeNotifier {
   CartManager._internal();
 
   static const String _storageKey = 'shopping_cart_items';
+  static const int maxTobaccoQuantity = 2;
 
   final List<CartItem> _items = [];
 
   List<CartItem> get items => _items;
+
+  int get totalTobaccoQuantity {
+    int total = 0;
+    for (final item in _items) {
+      if (item.product.isTobacco) {
+        total += item.quantity;
+      }
+    }
+    return total;
+  }
 
   void restoreCart() {
     final raw = LocalStorage.instance.read(_storageKey);
@@ -107,18 +118,22 @@ class CartManager extends ChangeNotifier {
   }
 
   // Sepete ürün ekleme
-  void addItem(Product product) {
-    if (product.stock <= 0) return;
+  bool addItem(Product product) {
+    if (product.stock <= 0) return false;
+    if (product.isTobacco && totalTobaccoQuantity >= maxTobaccoQuantity) {
+      return false;
+    }
 
     final existingIndex = _items.indexWhere(
       (item) => item.product.id == product.id,
     );
     if (existingIndex >= 0) {
-      increaseQuantity(product.id);
+      return increaseQuantity(product.id);
     } else {
       _items.add(CartItem(product: product));
       _persistCart();
       notifyListeners();
+      return true;
     }
   }
 
@@ -128,6 +143,9 @@ class CartManager extends ChangeNotifier {
 
     final item = _items[itemIndex];
     if (item.quantity >= item.product.stock) return false;
+    if (item.product.isTobacco && totalTobaccoQuantity >= maxTobaccoQuantity) {
+      return false;
+    }
 
     item.quantity += 1;
     _persistCart();

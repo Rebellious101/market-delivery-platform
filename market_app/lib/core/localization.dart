@@ -176,4 +176,7 @@ class AppStrings {
   String get productRequestEmpty => isEnglish
       ? 'Please enter a product name.'
       : 'Lütfen talep ettiğiniz ürün adını yazın.';
+  String get tobaccoLimitMessage => isEnglish
+      ? 'You can add at most 2 packs of cigarettes per order.'
+      : 'Bir siparişte en fazla 2 paket sigara ekleyebilirsiniz.';
 }

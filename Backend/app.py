@@ -1380,6 +1380,7 @@ def api_create_order():
 
             total_price = Decimal("0.00")
             minimum_order_total = Decimal("0.00")
+            tobacco_quantity = 0
             order_details = []
             for product_id, quantity in quantities_by_product.items():
                 product = products_db[product_id]
@@ -1388,11 +1389,19 @@ def api_create_order():
                 total_price += line_total
                 if not product.get("minimum_order_exempt"):
                     minimum_order_total += line_total
+                else:
+                    tobacco_quantity += quantity
                 order_details.append({
                     "product_id": product_id,
                     "quantity": quantity,
                     "price": item_price,
                 })
+
+            if tobacco_quantity > 2:
+                conn.rollback()
+                return jsonify({
+                    "error": "Bir siparişte en fazla 2 paket sigara satın alabilirsiniz."
+                }), 400
 
             if total_price > Decimal("99999999.99"):
                 conn.rollback()
