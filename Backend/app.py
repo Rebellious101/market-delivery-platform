@@ -400,6 +400,20 @@ def init_database_schema() -> None:
         )
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS product_requests (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NULL,
+                user_name VARCHAR(120) NULL,
+                user_phone VARCHAR(30) NULL,
+                product_name VARCHAR(30) NOT NULL,
+                status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS admin_login_attempts (
                 ip_address VARCHAR(64) PRIMARY KEY,
                 failed_count INT NOT NULL DEFAULT 0,
@@ -2159,6 +2173,144 @@ def admin_delete_subcategory(subcategory_id: int):
         finally:
             cursor.close()
     return redirect(url_for("admin_categories"))
+
+
+# --- ÜRÜN TALEPLERİ (API & ADMIN) ---
+@app.post("/api/product-requests")
+def api_create_product_request():
+    payload = request.get_json(silent=True) or {}
+    product_name = (payload.get("product_name") or "").strip()
+
+    if not product_name:
+        return jsonify({"success": False, "error": "Lütfen talep ettiğiniz ürünü yazın."}), 400
+    if len(product_name) > 30:
+        return jsonify({"success": False, "error": "Ürün talebi en fazla 30 karakter olabilir."}), 400
+
+    user_id = None
+    user_name = (payload.get("user_name") or "").strip() or None
+    user_phone = (payload.get("user_phone") or "").strip() or None
+
+    auth_header = request.headers.get("Authorization", "")
+    parts = auth_header.split()
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        decoded = decode_jwt_token(parts[1])
+        if decoded:
+            user_id = decoded.get("user_id")
+            if not user_name:
+                user_name = decoded.get("name")
+
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            if user_id and not user_phone:
+                cursor.execute("SELECT name, phone FROM users WHERE id = %s", (user_id,))
+                u_row = cursor.fetchone()
+                if u_row:
+                    user_name = user_name or u_row.get("name")
+                    user_phone = u_row.get("phone")
+
+            cursor.execute(
+                """
+                INSERT INTO product_requests (user_id, user_name, user_phone, product_name, status)
+                VALUES (%s, %s, %s, %s, 'PENDING')
+                """,
+                (user_id, (user_name or "")[:120] or None, (user_phone or "")[:30] or None, product_name),
+            )
+            conn.commit()
+            return jsonify({
+                "success": True,
+                "message": "Ürün talebiniz başarıyla alındı.",
+            }), 201
+        except Exception:
+            conn.rollback()
+            logger.exception("Ürün talebi kaydedilirken hata")
+            return jsonify({"success": False, "error": "Ürün talebi kaydedilemedi."}), 500
+        finally:
+            cursor.close()
+
+
+@app.get("/admin/product-requests")
+@admin_required
+def admin_product_requests():
+    with get_db() as conn:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute(
+                """
+                SELECT id, user_id, user_name, user_phone, product_name, status, created_at
+                FROM product_requests
+                ORDER BY created_at DESC, id DESC
+                """
+            )
+            requests_list = cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT product_name, COUNT(*) AS request_count
+                FROM product_requests
+                GROUP BY product_name
+                ORDER BY request_count DESC, MAX(created_at) DESC
+                LIMIT 10
+                """
+            )
+            top_requests = cursor.fetchall()
+            return render_template(
+                "admin/product_requests.html",
+                product_requests=requests_list,
+                top_requests=top_requests,
+            )
+        except Exception:
+            logger.exception("Ürün talepleri listelenirken hata")
+            flash("Ürün talepleri yüklenirken bir hata oluştu.", "error")
+            return render_template(
+                "admin/product_requests.html",
+                product_requests=[],
+                top_requests=[],
+            )
+        finally:
+            cursor.close()
+
+
+@app.post("/admin/product-requests/toggle/<int:request_id>")
+@admin_required
+def admin_toggle_product_request(request_id: int):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                UPDATE product_requests
+                SET status = CASE WHEN status = 'COMPLETED' THEN 'PENDING' ELSE 'COMPLETED' END
+                WHERE id = %s
+                """,
+                (request_id,),
+            )
+            conn.commit()
+            flash("Talep durumu güncellendi.", "success")
+        except Exception:
+            conn.rollback()
+            logger.exception("Ürün talebi durumu güncellenirken hata")
+            flash("Durum güncellenemedi.", "error")
+        finally:
+            cursor.close()
+    return redirect(url_for("admin_product_requests"))
+
+
+@app.post("/admin/product-requests/delete/<int:request_id>")
+@admin_required
+def admin_delete_product_request(request_id: int):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("DELETE FROM product_requests WHERE id = %s", (request_id,))
+            conn.commit()
+            flash("Ürün talebi silindi.", "success")
+        except Exception:
+            conn.rollback()
+            logger.exception("Ürün talebi silinirken hata")
+            flash("Ürün talebi silinemedi.", "error")
+        finally:
+            cursor.close()
+    return redirect(url_for("admin_product_requests"))
 
 
 def _serialize_order_rows(rows: List[Dict[str, Any]], *, for_json: bool = False) -> List[Dict[str, Any]]:

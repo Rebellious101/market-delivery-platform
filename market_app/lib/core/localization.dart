@@ -161,4 +161,19 @@ class AppStrings {
   String get noFavorites => isEnglish
       ? 'You have not added any favorite products yet.'
       : 'Henüz favori ürün eklemediniz.';
+  String get productRequestTitle =>
+      isEnglish ? 'Product Request' : 'Ürün Talebi';
+  String get productRequestSubtitle => isEnglish
+      ? 'Write the product you want to see in our market (max 30 chars).'
+      : 'Markette görmek istediğiniz ürünü yazın (en fazla 30 karakter).';
+  String get productRequestHint =>
+      isEnglish ? 'E.g. Zero sugar cola...' : 'Örn: Şekersiz soğuk çay...';
+  String get productRequestSubmit =>
+      isEnglish ? 'Send Request' : 'Talep Gönder';
+  String get productRequestSuccess => isEnglish
+      ? 'Your product request has been received. Thank you!'
+      : 'Ürün talebiniz alındı. Teşekkür ederiz!';
+  String get productRequestEmpty => isEnglish
+      ? 'Please enter a product name.'
+      : 'Lütfen talep ettiğiniz ürün adını yazın.';
 }

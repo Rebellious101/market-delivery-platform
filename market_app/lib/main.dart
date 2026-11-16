@@ -131,6 +131,9 @@ class _MarketHomePageState extends State<MarketHomePage> {
   int _selectedTab = 0;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _productRequestController =
+      TextEditingController();
+  bool _isSubmittingRequest = false;
   Timer? _searchDebounce;
   final Set<int> _favoriteProductIds = {};
 
@@ -250,6 +253,7 @@ class _MarketHomePageState extends State<MarketHomePage> {
   void dispose() {
     _searchDebounce?.cancel();
     _searchController.dispose();
+    _productRequestController.dispose();
     AddressBook.instance.removeListener(_onAddressBookChanged);
     super.dispose();
   }
@@ -1668,6 +1672,9 @@ class _MarketHomePageState extends State<MarketHomePage> {
               onTap: () => _showNotificationsSheet(context),
             ),
 
+            const SizedBox(height: 16),
+            _buildProductRequestCard(strings),
+
             if (isAuthenticated) ...[
               const SizedBox(height: 12),
               _buildProfileMenuItem(
@@ -1687,6 +1694,197 @@ class _MarketHomePageState extends State<MarketHomePage> {
           ],
         );
       },
+    );
+  }
+
+  Future<void> _submitProductRequest(AppStrings strings) async {
+    final text = _productRequestController.text.trim();
+    if (text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(strings.productRequestEmpty),
+          backgroundColor: Colors.red.shade600,
+        ),
+      );
+      return;
+    }
+    final trimmed = text.length > 30 ? text.substring(0, 30) : text;
+
+    setState(() => _isSubmittingRequest = true);
+    try {
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
+      final token = SessionManager.instance.token;
+      if (token != null && token.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $token';
+      }
+
+      final response = await http
+          .post(
+            Uri.parse('${AppConstants.baseUrl}/api/product-requests'),
+            headers: headers,
+            body: json.encode({
+              'product_name': trimmed,
+              'user_name': SessionManager.instance.userName,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (!mounted) return;
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        _productRequestController.clear();
+        FocusScope.of(context).unfocus();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(strings.productRequestSuccess),
+            backgroundColor: AppConstants.primaryColor,
+          ),
+        );
+      } else {
+        final body = json.decode(response.body);
+        final err = body['error']?.toString() ?? 'Bir hata oluştu.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(err),
+            backgroundColor: Colors.red.shade600,
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Sunucuya bağlanılamadı. Lütfen tekrar deneyin.'),
+          backgroundColor: Colors.red.shade600,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmittingRequest = false);
+      }
+    }
+  }
+
+  Widget _buildProductRequestCard(AppStrings strings) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7FAF8),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE3EDE6)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppConstants.primaryColor.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.add_shopping_cart_rounded,
+                  color: AppConstants.primaryColor,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      strings.productRequestTitle,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF1E2022),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      strings.productRequestSubtitle,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _productRequestController,
+            maxLength: 30,
+            textInputAction: TextInputAction.send,
+            onSubmitted: (_) {
+              if (!_isSubmittingRequest) {
+                _submitProductRequest(strings);
+              }
+            },
+            decoration: InputDecoration(
+              hintText: strings.productRequestHint,
+              hintStyle: TextStyle(fontSize: 13, color: Colors.grey.shade500),
+              filled: true,
+              fillColor: Colors.white,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 12,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFFDDE2E6)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFFDDE2E6)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(
+                  color: AppConstants.primaryColor,
+                  width: 1.5,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: _isSubmittingRequest
+                  ? null
+                  : () => _submitProductRequest(strings),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppConstants.primaryColor,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              icon: _isSubmittingRequest
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.send_rounded, size: 18),
+              label: Text(
+                strings.productRequestSubmit,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

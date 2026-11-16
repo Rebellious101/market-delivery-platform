@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ürün Talepleri | Market Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<header class="topbar">
+    <div>
+        <p class="eyebrow">MARKET ADMIN</p>
+        <h1>Ürün Talepleri</h1>
+    </div>
+    <nav class="nav-links">
+        <a href="{{ url_for('admin_dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('admin_products') }}">Ürünler</a>
+        <a href="{{ url_for('admin_categories') }}">Kategoriler</a>
+        <a href="{{ url_for('admin_campaigns') }}">Kampanyalar</a>
+        <a href="{{ url_for('admin_weekly_deals') }}">Haftanın İndirimleri</a>
+        <a href="{{ url_for('admin_orders') }}">Siparişler</a>
+        <a href="{{ url_for('admin_logout') }}">Çıkış</a>
+    </nav>
+</header>
+
+<main class="admin-shell">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+
+    <section class="page-intro">
+        <div>
+            <p class="eyebrow">MÜŞTERİ GERİ BİLDİRİMLERİ</p>
+            <h2>Talep edilen ürünler</h2>
+            <p class="muted">Kullanıcıların mobil uygulamadaki Profil sekmesinden gönderdiği ürün talepleri (en fazla 30 karakter).</p>
+        </div>
+        <div class="stat-pill">{{ product_requests|length }} talep</div>
+    </section>
+
+    {% if top_requests %}
+    <section class="panel">
+        <div class="panel-heading">
+            <div>
+                <p class="eyebrow">ÖZET ANALİZ</p>
+                <h2>En çok talep edilenler</h2>
+            </div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+            {% for item in top_requests %}
+                <span style="display: inline-flex; align-items: center; gap: 8px; background: #eef6f0; color: #1b5e20; padding: 6px 14px; border-radius: 999px; font-weight: 600; font-size: 13px;">
+                    {{ item.product_name }}
+                    <strong style="background: #2e7d32; color: #fff; border-radius: 999px; padding: 2px 8px; font-size: 11px;">{{ item.request_count }}x</strong>
+                </span>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    <section class="panel">
+        <div class="panel-heading">
+            <div>
+                <p class="eyebrow">TÜM KAYITLAR</p>
+                <h2>Gelen talepler</h2>
+            </div>
+        </div>
+        <div class="product-table-wrap">
+            <table class="product-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Talep Edilen Ürün</th>
+                        <th>Kullanıcı</th>
+                        <th>Tarih</th>
+                        <th>Durum</th>
+                        <th>İşlem</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for req in product_requests %}
+                    <tr>
+                        <td>#{{ req.id }}</td>
+                        <td><strong>{{ req.product_name }}</strong></td>
+                        <td>
+                            {{ req.user_name or 'Misafir Kullanıcı' }}
+                            {% if req.user_phone %}
+                                <br><small class="muted">{{ req.user_phone }}</small>
+                            {% endif %}
+                        </td>
+                        <td>{{ req.created_at.strftime('%d.%m.%Y %H:%M') if req.created_at else '-' }}</td>
+                        <td>
+                            <span class="badge {% if req.status == 'COMPLETED' %}badge-success{% else %}badge-muted{% endif %}">
+                                {% if req.status == 'COMPLETED' %}Eklendi{% else %}Bekliyor{% endif %}
+                            </span>
+                        </td>
+                        <td class="actions-cell">
+                            <form method="POST" action="{{ url_for('admin_toggle_product_request', request_id=req.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button class="table-action" type="submit">
+                                    {% if req.status == 'COMPLETED' %}Bekleyene Al{% else %}Eklendi İşaretle{% endif %}
+                                </button>
+                            </form>
+                            <form method="POST" action="{{ url_for('admin_delete_product_request', request_id=req.id) }}" onsubmit="return confirm('Bu ürün talebini silmek istediğinize emin misiniz?');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button class="table-action" type="submit" style="background: #fbe6e4; color: #9b3029;">Sil</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="empty-cell">Henüz gönderilmiş bir ürün talebi bulunmuyor.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</body>
+</html>
