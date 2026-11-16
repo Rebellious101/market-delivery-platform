@@ -6,10 +6,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:market_app/core/session_manager.dart';
-import 'package:market_app/main.dart';
-import 'package:market_app/models/product_model.dart';
-import 'package:market_app/screen/cart_manager.dart';
+import 'package:prestij_market/core/session_manager.dart';
+import 'package:prestij_market/main.dart';
+import 'package:prestij_market/models/product_model.dart';
+import 'package:prestij_market/screen/cart_manager.dart';
 
 void main() {
   setUp(() => SessionManager.instance.clearSession());
