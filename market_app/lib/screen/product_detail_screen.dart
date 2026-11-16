@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../core/age_verification.dart';
 import '../core/constants.dart';
 import '../core/local_storage.dart';
 import '../core/localization.dart';
@@ -179,14 +178,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                           ),
                         ),
                       ),
-                      onPressed: () async {
-                        if (product.is18Plus) {
-                          final ok = await AgeVerification.show18PlusDialog(
-                            context,
-                            isTobacco: product.isTobacco,
-                          );
-                          if (!ok || !context.mounted) return;
-                        }
+                      onPressed: () {
                         CartManager().addItem(product);
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(

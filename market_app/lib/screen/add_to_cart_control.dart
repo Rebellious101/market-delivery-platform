@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../core/age_verification.dart';
 import '../core/constants.dart';
 import '../models/product_model.dart';
 import 'cart_manager.dart';
@@ -125,16 +124,8 @@ class AddToCartControl extends StatelessWidget {
                               icon: Icons.add_rounded,
                               size: size,
                               enabled: canAdd,
-                              onTap: () async {
+                              onTap: () {
                                 HapticFeedback.lightImpact();
-                                if (product.is18Plus) {
-                                  final ok =
-                                      await AgeVerification.show18PlusDialog(
-                                        context,
-                                        isTobacco: product.isTobacco,
-                                      );
-                                  if (!ok) return;
-                                }
                                 CartManager().addItem(product);
                               },
                             ),
