@@ -180,18 +180,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                       ),
                       onPressed: () {
                         final added = CartManager().addItem(product);
-                        if (!added && product.isTobacco) {
-                          ScaffoldMessenger.of(context)
-                            ..hideCurrentSnackBar()
-                            ..showSnackBar(
-                              SnackBar(
-                                content: Text(strings.tobaccoLimitMessage),
-                                backgroundColor: Colors.red.shade600,
-                                duration: const Duration(seconds: 2),
-                              ),
-                            );
-                          return;
-                        }
                         if (!added) return;
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(

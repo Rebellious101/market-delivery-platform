@@ -281,19 +281,14 @@ class _CartScreenState extends State<CartScreen> {
                           onDecrease: () => setState(
                             () => cart.decreaseQuantity(item.product.id),
                           ),
-                          onIncrease: item.quantity >= item.product.stock
+                          onIncrease: (item.quantity >= item.product.stock ||
+                                  (item.product.isTobacco &&
+                                      cart.totalTobaccoQuantity >=
+                                          CartManager.maxTobaccoQuantity))
                               ? null
-                              : () {
-                                  final ok = cart.increaseQuantity(
-                                    item.product.id,
-                                  );
-                                  if (!ok && item.product.isTobacco) {
-                                    _showErrorSnackBar(
-                                      strings.tobaccoLimitMessage,
-                                    );
-                                  }
-                                  setState(() {});
-                                },
+                              : () => setState(
+                                  () => cart.increaseQuantity(item.product.id),
+                                ),
                           onRemove: () => setState(
                             () => cart.removeItem(item.product.id),
                           ),

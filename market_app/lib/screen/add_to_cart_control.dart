@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/constants.dart';
-import '../core/localization.dart';
 import '../models/product_model.dart';
 import 'cart_manager.dart';
 
@@ -36,20 +35,9 @@ class AddToCartControl extends StatelessWidget {
             product.isTobacco &&
             CartManager().totalTobaccoQuantity >=
                 CartManager.maxTobaccoQuantity;
-        final canAdd = !outOfStock && qty < product.stock;
+        final canAdd =
+            !outOfStock && qty < product.stock && !tobaccoLimitReached;
         final expanded = qty > 0;
-
-        void showTobaccoLimitSnack() {
-          ScaffoldMessenger.of(context)
-            ..hideCurrentSnackBar()
-            ..showSnackBar(
-              SnackBar(
-                content: Text(AppStrings.of(context).tobaccoLimitMessage),
-                backgroundColor: Colors.red.shade600,
-                duration: const Duration(seconds: 2),
-              ),
-            );
-        }
 
         return LayoutBuilder(
           builder: (context, constraints) {
@@ -131,10 +119,6 @@ class AddToCartControl extends StatelessWidget {
                                   enabled: canAdd,
                                   onTap: () {
                                     HapticFeedback.selectionClick();
-                                    if (tobaccoLimitReached) {
-                                      showTobaccoLimitSnack();
-                                      return;
-                                    }
                                     CartManager().increaseQuantity(product.id);
                                   },
                                 ),
@@ -147,10 +131,6 @@ class AddToCartControl extends StatelessWidget {
                               enabled: canAdd,
                               onTap: () {
                                 HapticFeedback.lightImpact();
-                                if (tobaccoLimitReached) {
-                                  showTobaccoLimitSnack();
-                                  return;
-                                }
                                 CartManager().addItem(product);
                               },
                             ),
