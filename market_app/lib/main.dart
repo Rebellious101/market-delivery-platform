@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:http/http.dart' as http;
 
+import 'core/age_verification.dart';
 import 'core/constants.dart';
 import 'core/local_storage.dart';
 import 'core/localization.dart';
@@ -126,6 +127,7 @@ class _MarketHomePageState extends State<MarketHomePage> {
   late Future<List<Product>> _weeklyDealsFuture;
   Future<List<Category>> _categoriesFuture = Future.value(const []);
   int? _selectedCategoryId;
+  Subcategory? _selectedSubcategory;
   int _selectedTab = 0;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
@@ -328,8 +330,36 @@ class _MarketHomePageState extends State<MarketHomePage> {
   void _selectCategory(int? categoryId) {
     setState(() {
       _selectedCategoryId = categoryId;
+      _selectedSubcategory = null;
       _productsFuture = _fetchProducts(categoryId: categoryId);
     });
+  }
+
+  Future<void> _openCategoryScreen(
+    Category category,
+    List<Category> allCategories,
+  ) async {
+    if (category.is18Plus) {
+      final ok = await AgeVerification.show18PlusDialog(
+        context,
+        isTobacco: category.isTobacco,
+      );
+      if (!ok || !mounted) return;
+    }
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => CategoryProductsScreen(
+          initialCategory: category,
+          categories: allCategories,
+          favoriteProductIds: _favoriteProductIds,
+          onToggleFavorite: _toggleFavorite,
+        ),
+      ),
+    );
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _retryLoadingProducts() {
@@ -942,8 +972,12 @@ class _MarketHomePageState extends State<MarketHomePage> {
                   return Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 6),
                     child: InkWell(
-                      onTap: () {
-                        _selectCategory(isFavorites ? favoritesCategoryId : category?.id);
+                      onTap: () async {
+                        if (category != null) {
+                          await _openCategoryScreen(category, categories);
+                          return;
+                        }
+                        _selectCategory(isFavorites ? favoritesCategoryId : null);
                       },
                       borderRadius: BorderRadius.circular(35),
                       child: Column(
@@ -1005,6 +1039,61 @@ class _MarketHomePageState extends State<MarketHomePage> {
                 },
               ),
             ),
+            if (_selectedCategoryId != null &&
+                _selectedCategoryId != favoritesCategoryId)
+              Builder(
+                builder: (context) {
+                  final activeCat = categories
+                      .where((c) => c.id == _selectedCategoryId)
+                      .firstOrNull;
+                  if (activeCat == null || activeCat.subcategories.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: SizedBox(
+                      height: 38,
+                      child: ListView.separated(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        scrollDirection: Axis.horizontal,
+                        itemCount: activeCat.subcategories.length + 1,
+                        separatorBuilder: (_, _) => const SizedBox(width: 8),
+                        itemBuilder: (context, idx) {
+                          final sub = idx == 0
+                              ? null
+                              : activeCat.subcategories[idx - 1];
+                          final selected = _selectedSubcategory?.id == sub?.id;
+                          return ChoiceChip(
+                            label: Text(sub == null ? strings.all : sub.name),
+                            selected: selected,
+                            showCheckmark: false,
+                            selectedColor: AppConstants.primaryColor,
+                            backgroundColor: const Color(0xFFF4F6F8),
+                            labelStyle: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: selected
+                                  ? Colors.white
+                                  : const Color(0xFF1E2022),
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                              side: BorderSide(
+                                color: selected
+                                    ? AppConstants.primaryColor
+                                    : const Color(0xFFE2E6EA),
+                              ),
+                            ),
+                            onSelected: (_) {
+                              setState(() => _selectedSubcategory = sub);
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  );
+                },
+              ),
           ],
         );
       },
@@ -1013,6 +1102,8 @@ class _MarketHomePageState extends State<MarketHomePage> {
 
   IconData _getCategoryIcon(String categoryName) {
     final lower = categoryName.toLowerCase();
+    if (AgeVerification.isTobaccoText(lower)) return Icons.smoking_rooms_rounded;
+    if (AgeVerification.isAlcoholText(lower)) return Icons.wine_bar_rounded;
     if (lower.contains('meyve')) return Icons.apple_rounded;
     if (lower.contains('sebze')) return Icons.eco_rounded;
     if (lower.contains('içecek') || lower.contains('icecek')) {
@@ -1137,12 +1228,17 @@ class _MarketHomePageState extends State<MarketHomePage> {
 
         final products = snapshot.data ?? <Product>[];
         final query = _searchQuery.trim().toLowerCase();
-        final filtered = query.isEmpty
-            ? products
-            : products.where((p) {
-                return p.title.toLowerCase().contains(query) ||
-                    p.description.toLowerCase().contains(query);
-              }).toList();
+        final subFilter = _selectedSubcategory;
+        final filtered = products.where((p) {
+          if (subFilter != null && !p.matchesSubcategory(subFilter)) {
+            return false;
+          }
+          if (query.isNotEmpty) {
+            return p.title.toLowerCase().contains(query) ||
+                p.description.toLowerCase().contains(query);
+          }
+          return true;
+        }).toList();
 
         if (filtered.isEmpty) {
           final isFavorites = _selectedCategoryId == favoritesCategoryId;
@@ -1412,12 +1508,27 @@ class _MarketHomePageState extends State<MarketHomePage> {
                                 : const Color(0xFF1E2022),
                           ),
                         ),
+                        subtitle: (category != null && category.subcategories.isNotEmpty)
+                            ? Text(
+                                category.subcategories.map((s) => s.name).join(' • '),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade600,
+                                ),
+                              )
+                            : null,
                         trailing: const Icon(
                           Icons.chevron_right,
                           color: Colors.grey,
                         ),
-                        onTap: () {
-                          _selectCategory(isFavorites ? favoritesCategoryId : category?.id);
+                        onTap: () async {
+                          if (category != null) {
+                            await _openCategoryScreen(category, categories);
+                            return;
+                          }
+                          _selectCategory(isFavorites ? favoritesCategoryId : null);
                           setState(() => _selectedTab = 0);
                         },
                       ),
@@ -1695,6 +1806,468 @@ class _MarketHomePageState extends State<MarketHomePage> {
           child: Icon(icon),
         );
       },
+    );
+  }
+}
+
+class CategoryProductsScreen extends StatefulWidget {
+  const CategoryProductsScreen({
+    super.key,
+    required this.initialCategory,
+    required this.categories,
+    required this.favoriteProductIds,
+    required this.onToggleFavorite,
+  });
+
+  final Category initialCategory;
+  final List<Category> categories;
+  final Set<int> favoriteProductIds;
+  final Future<void> Function(int productId) onToggleFavorite;
+
+  @override
+  State<CategoryProductsScreen> createState() => _CategoryProductsScreenState();
+}
+
+class _CategoryProductsScreenState extends State<CategoryProductsScreen> {
+  late Category _selectedCategory;
+  Subcategory? _selectedSubcategory;
+  late Future<List<Product>> _productsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedCategory = widget.initialCategory;
+    _productsFuture = _fetchCategoryProducts(_selectedCategory.id);
+  }
+
+  Future<List<Product>> _fetchCategoryProducts(int categoryId) async {
+    final uri = Uri.parse('${AppConstants.baseUrl}/api/products').replace(
+      queryParameters: {'category_id': categoryId.toString()},
+    );
+    final response = await http.get(uri).timeout(const Duration(seconds: 10));
+    if (response.statusCode == 200) {
+      final List<dynamic> body = json.decode(response.body);
+      return body.map((item) => Product.fromJson(item)).toList();
+    }
+    throw Exception('Ürünler yüklenemedi (${response.statusCode}).');
+  }
+
+  Future<void> _switchCategory(Category category) async {
+    if (category.id == _selectedCategory.id) return;
+    if (category.is18Plus) {
+      final ok = await AgeVerification.show18PlusDialog(
+        context,
+        isTobacco: category.isTobacco,
+      );
+      if (!ok || !mounted) return;
+    }
+    setState(() {
+      _selectedCategory = category;
+      _selectedSubcategory = null;
+      _productsFuture = _fetchCategoryProducts(category.id);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppStrings.of(context);
+    final subcategories = _selectedCategory.subcategories;
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        title: Text(
+          _selectedCategory.name,
+          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+        ),
+        centerTitle: false,
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ListenableBuilder(
+              listenable: CartManager(),
+              builder: (context, _) {
+                final totalCount = CartManager().totalQuantity;
+                return IconButton(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const CartScreen()),
+                    ).then((_) {
+                      if (mounted) setState(() {});
+                    });
+                  },
+                  icon: Badge(
+                    isLabelVisible: totalCount > 0,
+                    label: Text(
+                      '$totalCount',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 10,
+                      ),
+                    ),
+                    backgroundColor: AppConstants.primaryColor,
+                    child: const Icon(Icons.shopping_cart_outlined),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 1. Üst Kaydırmalı Ana Kategoriler Çubuğu
+          if (widget.categories.isNotEmpty)
+            Container(
+              height: 46,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                border: Border(
+                  bottom: BorderSide(color: Color(0xFFF0F1F3), width: 1),
+                ),
+              ),
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                scrollDirection: Axis.horizontal,
+                itemCount: widget.categories.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 8),
+                itemBuilder: (context, index) {
+                  final cat = widget.categories[index];
+                  final isSelected = cat.id == _selectedCategory.id;
+                  return InkWell(
+                    onTap: () => _switchCategory(cat),
+                    borderRadius: BorderRadius.circular(18),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? AppConstants.primaryColor
+                            : const Color(0xFFF4F6F8),
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        cat.name,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: isSelected
+                              ? FontWeight.w700
+                              : FontWeight.w600,
+                          color: isSelected
+                              ? Colors.white
+                              : const Color(0xFF2B2D42),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+
+          // 2. Üst Kaydırmalı Alt Kategoriler (Subcategory) Çubuğu
+          if (subcategories.isNotEmpty)
+            Container(
+              height: 50,
+              decoration: const BoxDecoration(
+                color: Color(0xFFFAFDFB),
+                border: Border(
+                  bottom: BorderSide(color: Color(0xFFE9ECEF), width: 1),
+                ),
+              ),
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                scrollDirection: Axis.horizontal,
+                itemCount: subcategories.length + 1,
+                separatorBuilder: (_, _) => const SizedBox(width: 8),
+                itemBuilder: (context, index) {
+                  final sub = index == 0 ? null : subcategories[index - 1];
+                  final isSelected = _selectedSubcategory?.id == sub?.id;
+                  final label = sub == null ? strings.all : sub.name;
+
+                  return InkWell(
+                    onTap: () {
+                      setState(() => _selectedSubcategory = sub);
+                    },
+                    borderRadius: BorderRadius.circular(20),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 160),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? AppConstants.primaryColor.withValues(alpha: 0.14)
+                            : Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: isSelected
+                              ? AppConstants.primaryColor
+                              : const Color(0xFFDDE2E6),
+                          width: isSelected ? 1.5 : 1,
+                        ),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        label,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: isSelected
+                              ? FontWeight.w800
+                              : FontWeight.w600,
+                          color: isSelected
+                              ? AppConstants.primaryColor
+                              : const Color(0xFF343A40),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+
+          // 3. Ürün Izgarası
+          Expanded(
+            child: RefreshIndicator(
+              color: AppConstants.primaryColor,
+              onRefresh: () async {
+                final fut = _fetchCategoryProducts(_selectedCategory.id);
+                setState(() => _productsFuture = fut);
+                await fut;
+              },
+              child: FutureBuilder<List<Product>>(
+                future: _productsFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                      child: CircularProgressIndicator(
+                        color: AppConstants.primaryColor,
+                      ),
+                    );
+                  }
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.cloud_off,
+                              size: 44,
+                              color: Colors.grey,
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              'Ürünler yüklenemedi.\n${snapshot.error}',
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 12),
+                            FilledButton.icon(
+                              onPressed: () {
+                                setState(() {
+                                  _productsFuture = _fetchCategoryProducts(
+                                    _selectedCategory.id,
+                                  );
+                                });
+                              },
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Tekrar dene'),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: AppConstants.primaryColor,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+
+                  final allProducts = snapshot.data ?? const <Product>[];
+                  final activeSub = _selectedSubcategory;
+                  final filtered = activeSub == null
+                      ? allProducts
+                      : allProducts
+                          .where((p) => p.matchesSubcategory(activeSub))
+                          .toList();
+
+                  if (filtered.isEmpty) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(32),
+                        child: Text(
+                          strings.noSearchResults,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.grey.shade600),
+                        ),
+                      ),
+                    );
+                  }
+
+                  return GridView.builder(
+                    padding: const EdgeInsets.all(16),
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 2,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 14,
+                      childAspectRatio: 0.72,
+                    ),
+                    itemCount: filtered.length,
+                    itemBuilder: (context, index) {
+                      final product = filtered[index];
+                      final isFavorite = widget.favoriteProductIds.contains(
+                        product.id,
+                      );
+
+                      return Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: const Color(0xFFF0F1F3),
+                            width: 1.2,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.025),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Align(
+                              alignment: Alignment.topRight,
+                              child: IconButton(
+                                iconSize: 20,
+                                padding: const EdgeInsets.all(8),
+                                constraints: const BoxConstraints(),
+                                icon: Icon(
+                                  isFavorite
+                                      ? Icons.favorite_rounded
+                                      : Icons.favorite_border_rounded,
+                                  color: isFavorite
+                                      ? Colors.red
+                                      : Colors.grey.shade400,
+                                ),
+                                onPressed: () async {
+                                  await widget.onToggleFavorite(product.id);
+                                  if (mounted) setState(() {});
+                                },
+                              ),
+                            ),
+                            Expanded(
+                              child: Stack(
+                                children: [
+                                  Positioned.fill(
+                                    child: InkWell(
+                                      onTap: () => Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) =>
+                                              ProductDetailScreen(
+                                                product: product,
+                                              ),
+                                        ),
+                                      ).then((_) {
+                                        if (mounted) setState(() {});
+                                      }),
+                                      child: Center(
+                                        child: Padding(
+                                          padding: const EdgeInsets.fromLTRB(
+                                            8,
+                                            0,
+                                            8,
+                                            22,
+                                          ),
+                                          child: Image.network(
+                                            product.imageUrl,
+                                            fit: BoxFit.contain,
+                                            errorBuilder: (_, _, _) =>
+                                                const Icon(
+                                                  Icons
+                                                      .image_not_supported_outlined,
+                                                  size: 40,
+                                                  color: Colors.grey,
+                                                ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  Positioned(
+                                    left: 10,
+                                    right: 10,
+                                    bottom: 0,
+                                    child: AddToCartControl(product: product),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    product.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF1E2022),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    product.description.isNotEmpty
+                                        ? product.description
+                                        : (product.subcategory.isNotEmpty
+                                            ? product.subcategory
+                                            : '1 adet'),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w400,
+                                      color: Colors.grey.shade500,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    '₺${product.price.toStringAsFixed(2)}',
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w900,
+                                      color: AppConstants.primaryColor,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

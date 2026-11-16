@@ -55,10 +55,19 @@
             </label>
             <label>
                 Kategori
-                <select name="category_id" required>
+                <select name="category_id" id="add_category_id" required onchange="filterSubcategories('add_category_id', 'add_subcategory_id')">
                     <option value="">Kategori seçin</option>
                     {% for category in categories %}
                         <option value="{{ category.id }}">{{ category.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                Alt Kategori (İsteğe bağlı)
+                <select name="subcategory_id" id="add_subcategory_id">
+                    <option value="">Alt kategori seçin (Tümü)</option>
+                    {% for sub in subcategories %}
+                        <option value="{{ sub.id }}" data-category-id="{{ sub.category_id }}">{{ sub.name }}</option>
                     {% endfor %}
                 </select>
             </label>
@@ -126,7 +135,12 @@
                                 <small>#{{ product.id }}</small>
                             </div>
                         </td>
-                        <td>{{ product.category or 'Kategorisiz' }}</td>
+                        <td>
+                            {{ product.category or 'Kategorisiz' }}
+                            {% if product.subcategory %}
+                                <br><small class="muted">↳ {{ product.subcategory }}</small>
+                            {% endif %}
+                        </td>
                         <td>{{ '%.2f'|format(product.price) }} TL</td>
                         <td>{{ product.stock }}</td>
                         <td>{% if product.minimum_order_exempt %}Hariç{% else %}Dahil{% endif %}</td>
@@ -147,5 +161,17 @@
         </div>
     </section>
 </main>
+<script>
+function filterSubcategories(catSelectId, subSelectId) {
+    const catId = document.getElementById(catSelectId).value;
+    const subSelect = document.getElementById(subSelectId);
+    const options = subSelect.querySelectorAll('option[data-category-id]');
+    subSelect.value = '';
+    options.forEach(opt => {
+        opt.style.display = (!catId || opt.getAttribute('data-category-id') === catId) ? '' : 'none';
+    });
+}
+document.addEventListener('DOMContentLoaded', () => filterSubcategories('add_category_id', 'add_subcategory_id'));
+</script>
 </body>
 </html>

@@ -55,7 +55,7 @@
         </div>
         <div class="category-list">
             {% for category in categories %}
-                <div class="category-row">
+                <div class="category-row" style="flex-wrap: wrap; gap: 10px;">
                     <span class="category-icon">#</span>
                     <strong>{{ category.name }}</strong>
                     <span class="category-count" style="margin-right: 15px;">{{ category.product_count }} ürün</span>
@@ -66,6 +66,30 @@
                         <form method="POST" action="{{ url_for('admin_delete_category', category_id=category.id) }}" onsubmit="return confirm('\'{{ category.name }}\' kategorisini silmek istediğinize emin misiniz?');">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button class="table-action" type="submit" style="background: #fbe6e4; color: #9b3029;">Sil</button>
+                        </form>
+                    </div>
+
+                    <!-- ALT KATEGORİLER -->
+                    <div style="width: 100%; padding-left: 36px; margin-top: 6px;">
+                        <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px;">
+                            <small class="muted" style="font-weight: 600;">Alt Kategoriler:</small>
+                            {% for sub in category.subcategories %}
+                                <span style="display: inline-flex; align-items: center; gap: 6px; background: #eef6f0; color: #1b5e20; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;">
+                                    {{ sub.name }}
+                                    <form method="POST" action="{{ url_for('admin_delete_subcategory', subcategory_id=sub.id) }}" style="display: inline; margin: 0;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" title="Alt kategoriyi sil" style="background: none; border: none; color: #9b3029; cursor: pointer; font-weight: bold; padding: 0 2px;">×</button>
+                                    </form>
+                                </span>
+                            {% else %}
+                                <small class="muted">Alt kategori yok</small>
+                            {% endfor %}
+                        </div>
+                        <form method="POST" action="{{ url_for('admin_add_subcategory') }}" style="display: flex; gap: 8px; max-width: 380px;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="category_id" value="{{ category.id }}">
+                            <input type="text" name="name" placeholder="Yeni alt kategori adı..." required style="padding: 6px 10px; font-size: 13px;">
+                            <button class="table-action" type="submit" style="white-space: nowrap;">+ Alt Kategori Ekle</button>
                         </form>
                     </div>
                 </div>

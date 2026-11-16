@@ -182,12 +182,24 @@ def init_database_schema() -> None:
         )
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS subcategories (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                category_id INT NOT NULL,
+                name VARCHAR(100) NOT NULL,
+                UNIQUE KEY uq_cat_sub (category_id, name),
+                FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS products (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(150) NOT NULL,
                 description TEXT,
                 price DECIMAL(10, 2) NOT NULL,
                 category_id INT NOT NULL,
+                subcategory_id INT NULL,
                 image VARCHAR(255) NOT NULL,
                 stock INT NOT NULL DEFAULT 0,
                 active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -195,11 +207,92 @@ def init_database_schema() -> None:
             )
             """
         )
+        cursor.execute("SHOW COLUMNS FROM products LIKE 'subcategory_id'")
+        if not cursor.fetchone():
+            cursor.execute(
+                "ALTER TABLE products ADD COLUMN subcategory_id INT NULL AFTER category_id"
+            )
         cursor.execute("SHOW COLUMNS FROM products LIKE 'minimum_order_exempt'")
         if not cursor.fetchone():
             cursor.execute(
                 "ALTER TABLE products ADD COLUMN minimum_order_exempt BOOLEAN NOT NULL DEFAULT FALSE"
             )
+        # Mevcut kategoriler için varsayılan alt kategorileri oluştur (yoksa ekler)
+        default_subcategories_map = {
+            "İçecek": ["Gazlı İçecek", "Su & Maden Suyu", "Meyve Suyu", "Soğuk Çay & Kahve", "Enerji İçeceği"],
+            "Atıştırmalık": ["Cips & Kraker", "Çikolata & Gofret", "Bisküvi & Kek", "Kuruyemiş", "Şekerleme & Sakız"],
+            "Temel Gıda": ["Ekmek & Unlu Mamüller", "Makarna & Bakliyat", "Sıvı Yağ", "Un, Şeker & Tuz", "Konserve & Salça"],
+            "Süt Ürünleri": ["Süt", "Yoğurt & Ayran", "Peynir", "Tereyağı & Kaymak"],
+            "Temizlik": ["Çamaşır Yıkama", "Bulaşık Yıkama", "Yüzey & Genel Temizlik", "Kağıt Ürünleri"],
+            "Kahvaltılık": ["Zeytin", "Reçel, Bal & Krem Çikolata", "Yumurta", "Şarküteri & Sucuk", "Mısır Gevreği & Yulaf"],
+            "Kişisel bakım": ["Şampuan & Duş Jeli", "Ağız & Diş Bakımı", "Deodorant & Parfüm", "Cilt & El Bakımı", "Hijyenik Ped & Pamuk"],
+            "Sigara/Tütün": ["Sigara", "Sarma Tütün", "Puro & Çakmak"],
+            "Alkollü içecek": ["Bira", "Şarap", "Rakı", "Viski & Votka", "Cin & Likör"],
+        }
+        cursor.execute("SELECT id, name FROM categories")
+        existing_cats = cursor.fetchall()
+        for cat_id, cat_name in existing_cats:
+            matched_subs = None
+            for key_name, sub_list in default_subcategories_map.items():
+                if key_name.lower() == str(cat_name).strip().lower():
+                    matched_subs = sub_list
+                    break
+            if not matched_subs:
+                matched_subs = ["Genel", "Popüler", "Avantajlı Paket"]
+            for sub_name in matched_subs:
+                cursor.execute(
+                    "INSERT IGNORE INTO subcategories (category_id, name) VALUES (%s, %s)",
+                    (cat_id, sub_name),
+                )
+
+        # Alt kategorisi atanmamış mevcut ürünleri isimlerine göre otomatik eşleştir
+        cursor.execute("SELECT id, category_id, name FROM subcategories")
+        all_subs = cursor.fetchall()
+        sub_lookup: Dict[tuple, int] = {}
+        first_sub_for_cat: Dict[int, int] = {}
+        for s_id, s_cat_id, s_name in all_subs:
+            sub_lookup[(int(s_cat_id), str(s_name).lower())] = int(s_id)
+            first_sub_for_cat.setdefault(int(s_cat_id), int(s_id))
+
+        cursor.execute("SELECT id, category_id, name FROM products WHERE subcategory_id IS NULL")
+        unassigned_products = cursor.fetchall()
+        for p_id, p_cat_id, p_name in unassigned_products:
+            p_cat_id = int(p_cat_id)
+            lower_name = str(p_name).lower()
+            target_sub_name = None
+            if any(k in lower_name for k in ("maden suyu", "soda", "avşar", "uludağ doğal", "frutti elmalı", "frutti limonlu")):
+                target_sub_name = "su & maden suyu"
+            elif any(k in lower_name for k in ("iced coffee", "mr. brown", "kahve", "soğuk çay", "ice tea", "lipton", "fuse tea")):
+                target_sub_name = "soğuk çay & kahve"
+            elif any(k in lower_name for k in ("nektar", "meyve", "elma suyu", "vişne", "şeftali", "kayısı", "portakal nektar", "limonata")):
+                target_sub_name = "meyve suyu"
+            elif any(k in lower_name for k in ("cola", "fanta", "sprite", "gazoz", "frutti extra", "pepsi")):
+                target_sub_name = "gazlı içecek"
+            elif any(k in lower_name for k in ("cips", "lays", "ruffles", "doritos", "kraker", "crax", "gong", "patlağı")):
+                target_sub_name = "cips & kraker"
+            elif any(k in lower_name for k in ("bisküvi", "burçak", "tutku", "negro", "benimo", "kek", "paykek", "browni", "topkek", "popkek", "form çikolata kaplı")):
+                target_sub_name = "bisküvi & kek"
+            elif any(k in lower_name for k in ("çikolata", "karam", "canga", "hoşbeş", "gofret", "bar")):
+                target_sub_name = "çikolata & gofret"
+            elif any(k in lower_name for k in ("yulaf", "lifalif", "gevrek", "mısır gevreği")):
+                target_sub_name = "mısır gevreği & yulaf"
+            elif any(k in lower_name for k in ("ekmek", "unlu")):
+                target_sub_name = "ekmek & unlu mamüller"
+            elif any(k in lower_name for k in ("süt", "sut")):
+                target_sub_name = "süt"
+            elif any(k in lower_name for k in ("efes", "tuborg", "carlsberg", "corona", "miller", "beck", "bomonti", "amsterdam", "desperados", "sol ", "frederik", "kronenbourg", "bira")):
+                target_sub_name = "bira"
+
+            assigned_sub_id = (
+                sub_lookup.get((p_cat_id, target_sub_name))
+                if target_sub_name
+                else None
+            ) or first_sub_for_cat.get(p_cat_id)
+            if assigned_sub_id:
+                cursor.execute(
+                    "UPDATE products SET subcategory_id = %s WHERE id = %s",
+                    (assigned_sub_id, int(p_id)),
+                )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS weekly_deal_products (
@@ -1068,6 +1161,16 @@ def api_categories():
         try:
             cursor.execute("SELECT id, name FROM categories ORDER BY name ASC")
             categories = cursor.fetchall()
+            cursor.execute(
+                "SELECT id, category_id, name FROM subcategories ORDER BY id ASC"
+            )
+            subcategories = cursor.fetchall()
+            subs_by_cat: Dict[int, List[Dict[str, Any]]] = {}
+            for sub in subcategories:
+                cid = int(sub["category_id"])
+                subs_by_cat.setdefault(cid, []).append(sub)
+            for cat in categories:
+                cat["subcategories"] = subs_by_cat.get(int(cat["id"]), [])
             return jsonify(categories)
         except Exception:
             logger.exception("Kategoriler getirilirken hata")
@@ -1095,6 +1198,7 @@ def api_store_settings():
 @app.get("/api/products")
 def api_products():
     category_id = request.args.get("category_id")
+    subcategory_id = request.args.get("subcategory_id")
     search_q = request.args.get("q", "").strip()
 
     try:
@@ -1117,9 +1221,13 @@ def api_products():
                     products.image,
                     products.stock,
                     products.minimum_order_exempt,
-                    categories.name AS category
+                    products.category_id,
+                    products.subcategory_id,
+                    categories.name AS category,
+                    COALESCE(subcategories.name, '') AS subcategory
                 FROM products
                 JOIN categories ON products.category_id = categories.id
+                LEFT JOIN subcategories ON products.subcategory_id = subcategories.id
                 WHERE products.active = TRUE
             """
             params: List[Any] = []
@@ -1127,6 +1235,10 @@ def api_products():
             if category_id:
                 base_query += " AND products.category_id = %s"
                 params.append(int(category_id))
+
+            if subcategory_id:
+                base_query += " AND products.subcategory_id = %s"
+                params.append(int(subcategory_id))
 
             if search_q:
                 base_query += " AND (products.name LIKE %s OR products.description LIKE %s)"
@@ -1160,10 +1272,14 @@ def api_weekly_deals():
                     products.image,
                     products.stock,
                     products.minimum_order_exempt,
-                    categories.name AS category
+                    products.category_id,
+                    products.subcategory_id,
+                    categories.name AS category,
+                    COALESCE(subcategories.name, '') AS subcategory
                 FROM weekly_deal_products
                 JOIN products ON products.id = weekly_deal_products.product_id
                 JOIN categories ON products.category_id = categories.id
+                LEFT JOIN subcategories ON products.subcategory_id = subcategories.id
                 WHERE products.active = TRUE AND products.stock > 0
                 ORDER BY weekly_deal_products.position, weekly_deal_products.added_at
                 """
@@ -1732,6 +1848,8 @@ def admin_products():
             name = request.form.get("name", "").strip()
             description = request.form.get("description", "").strip()
             category_id = request.form.get("category_id", "").strip()
+            raw_sub_id = request.form.get("subcategory_id", "").strip()
+            subcategory_id = int(raw_sub_id) if raw_sub_id.isdigit() else None
             minimum_order_exempt = request.form.get("minimum_order_exempt") == "on"
             image = request.files.get("image")
 
@@ -1768,14 +1886,14 @@ def admin_products():
                 cursor.execute(
                     """
                     INSERT INTO products (
-                        name, description, price, image, stock, category_id, active,
+                        name, description, price, image, stock, category_id, subcategory_id, active,
                         minimum_order_exempt
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, %s)
                     """,
                     (
                         name, description, price, filename, stock, int(category_id),
-                        minimum_order_exempt,
+                        subcategory_id, minimum_order_exempt,
                     ),
                 )
                 conn.commit()
@@ -1795,20 +1913,29 @@ def admin_products():
             cursor.execute(
                 """
                 SELECT p.id, p.name, p.description, p.price, p.image, p.stock,
-                       p.active, p.minimum_order_exempt, c.name AS category
+                       p.active, p.minimum_order_exempt, c.name AS category,
+                       s.name AS subcategory
                 FROM products p
                 LEFT JOIN categories c ON c.id = p.category_id
+                LEFT JOIN subcategories s ON s.id = p.subcategory_id
                 ORDER BY p.id DESC
                 """
             )
             products = cursor.fetchall()
             cursor.execute("SELECT id, name FROM categories ORDER BY name")
             categories = cursor.fetchall()
-            return render_template("admin/products.html", products=products, categories=categories)
+            cursor.execute("SELECT id, category_id, name FROM subcategories ORDER BY name")
+            subcategories = cursor.fetchall()
+            return render_template(
+                "admin/products.html",
+                products=products,
+                categories=categories,
+                subcategories=subcategories,
+            )
         except Exception:
             logger.exception("Ürün listesi getirilirken hata")
             flash("Ürünler listelenirken bir hata oluştu.", "error")
-            return render_template("admin/products.html", products=[], categories=[])
+            return render_template("admin/products.html", products=[], categories=[], subcategories=[])
         finally:
             cursor.close()
 
@@ -1823,6 +1950,8 @@ def admin_edit_product(product_id: int):
             name = request.form.get("name", "").strip()
             description = request.form.get("description", "").strip()
             category_id = request.form.get("category_id", "").strip()
+            raw_sub_id = request.form.get("subcategory_id", "").strip()
+            subcategory_id = int(raw_sub_id) if raw_sub_id.isdigit() else None
             minimum_order_exempt = request.form.get("minimum_order_exempt") == "on"
             image = request.files.get("image")
 
@@ -1865,12 +1994,12 @@ def admin_edit_product(product_id: int):
                     """
                     UPDATE products
                     SET name = %s, description = %s, price = %s, stock = %s,
-                        category_id = %s, image = %s, minimum_order_exempt = %s
+                        category_id = %s, subcategory_id = %s, image = %s, minimum_order_exempt = %s
                     WHERE id = %s
                     """,
                     (
-                        name, description, price, stock, int(category_id), image_filename,
-                        minimum_order_exempt, product_id,
+                        name, description, price, stock, int(category_id), subcategory_id,
+                        image_filename, minimum_order_exempt, product_id,
                     ),
                 )
                 conn.commit()
@@ -1893,11 +2022,18 @@ def admin_edit_product(product_id: int):
         product = cursor.fetchone()
         cursor.execute("SELECT id, name FROM categories ORDER BY name")
         categories = cursor.fetchall()
+        cursor.execute("SELECT id, category_id, name FROM subcategories ORDER BY name")
+        subcategories = cursor.fetchall()
         cursor.close()
         if not product:
             flash("Ürün bulunamadı.", "error")
             return redirect(url_for("admin_products"))
-        return render_template("admin/edit_product.html", product=product, categories=categories)
+        return render_template(
+            "admin/edit_product.html",
+            product=product,
+            categories=categories,
+            subcategories=subcategories,
+        )
 
 
 @app.post("/admin/products/toggle/<int:product_id>")
@@ -1930,6 +2066,11 @@ def admin_categories():
             else:
                 try:
                     cursor.execute("INSERT INTO categories (name) VALUES (%s)", (name,))
+                    new_cat_id = cursor.lastrowid
+                    cursor.execute(
+                        "INSERT IGNORE INTO subcategories (category_id, name) VALUES (%s, %s)",
+                        (new_cat_id, "Genel"),
+                    )
                     conn.commit()
                     flash("Kategori başarıyla oluşturuldu.", "success")
                 except mysql.connector.IntegrityError:
@@ -1953,6 +2094,13 @@ def admin_categories():
                 """
             )
             categories = cursor.fetchall()
+            cursor.execute("SELECT id, category_id, name FROM subcategories ORDER BY id ASC")
+            subcategories = cursor.fetchall()
+            subs_by_cat: Dict[int, List[Dict[str, Any]]] = {}
+            for sub in subcategories:
+                subs_by_cat.setdefault(int(sub["category_id"]), []).append(sub)
+            for cat in categories:
+                cat["subcategories"] = subs_by_cat.get(int(cat["id"]), [])
             return render_template("admin/categories.html", categories=categories)
         except Exception:
             logger.exception("Kategoriler listelenirken hata")
@@ -1960,6 +2108,57 @@ def admin_categories():
             return render_template("admin/categories.html", categories=[])
         finally:
             cursor.close()
+
+
+@app.post("/admin/subcategories/add")
+@admin_required
+def admin_add_subcategory():
+    category_id = request.form.get("category_id", type=int)
+    name = request.form.get("name", "").strip()
+    if not category_id or not name:
+        flash("Kategori ve alt kategori adı zorunludur.", "error")
+        return redirect(url_for("admin_categories"))
+    with get_db() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO subcategories (category_id, name) VALUES (%s, %s)",
+                (category_id, name),
+            )
+            conn.commit()
+            flash(f"'{name}' alt kategorisi eklendi.", "success")
+        except mysql.connector.IntegrityError:
+            conn.rollback()
+            flash("Bu alt kategori zaten mevcut.", "error")
+        except Exception:
+            conn.rollback()
+            logger.exception("Alt kategori eklenirken hata")
+            flash("Alt kategori eklenemedi.", "error")
+        finally:
+            cursor.close()
+    return redirect(url_for("admin_categories"))
+
+
+@app.post("/admin/subcategories/delete/<int:subcategory_id>")
+@admin_required
+def admin_delete_subcategory(subcategory_id: int):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "UPDATE products SET subcategory_id = NULL WHERE subcategory_id = %s",
+                (subcategory_id,),
+            )
+            cursor.execute("DELETE FROM subcategories WHERE id = %s", (subcategory_id,))
+            conn.commit()
+            flash("Alt kategori silindi.", "success")
+        except Exception:
+            conn.rollback()
+            logger.exception("Alt kategori silinirken hata")
+            flash("Alt kategori silinemedi.", "error")
+        finally:
+            cursor.close()
+    return redirect(url_for("admin_categories"))
 
 
 def _serialize_order_rows(rows: List[Dict[str, Any]], *, for_json: bool = False) -> List[Dict[str, Any]]:

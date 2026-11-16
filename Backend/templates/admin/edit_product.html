@@ -44,9 +44,18 @@
             </label>
             <label>
                 Kategori
-                <select name="category_id" required>
+                <select name="category_id" id="edit_category_id" required onchange="filterEditSubcategories(true)">
                     {% for category in categories %}
                         <option value="{{ category.id }}" {% if category.id == product.category_id %}selected{% endif %}>{{ category.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                Alt Kategori (İsteğe bağlı)
+                <select name="subcategory_id" id="edit_subcategory_id">
+                    <option value="">Alt kategori seçin (Tümü)</option>
+                    {% for sub in subcategories %}
+                        <option value="{{ sub.id }}" data-category-id="{{ sub.category_id }}" {% if sub.id == product.subcategory_id %}selected{% endif %}>{{ sub.name }}</option>
                     {% endfor %}
                 </select>
             </label>
@@ -81,5 +90,16 @@
         </form>
     </section>
 </main>
+<script>
+function filterEditSubcategories(resetValue) {
+    const catId = document.getElementById('edit_category_id').value;
+    const subSelect = document.getElementById('edit_subcategory_id');
+    if (resetValue) subSelect.value = '';
+    subSelect.querySelectorAll('option[data-category-id]').forEach(opt => {
+        opt.style.display = (!catId || opt.getAttribute('data-category-id') === catId) ? '' : 'none';
+    });
+}
+document.addEventListener('DOMContentLoaded', () => filterEditSubcategories(false));
+</script>
 </body>
 </html>
