@@ -6,7 +6,7 @@ on:
 
 jobs:
   build-ios:
-    runs-on: macos-latest
+    runs-on: macos-15-intel
     timeout-minutes: 60
     env:
       KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
@@ -28,12 +28,34 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Write App Store Connect API key
+      - name: Setup temporary Keychain & App Store Connect API Key
         env:
           API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
         run: |
           mkdir -p "$HOME/private_keys"
           printf '%s\n' "$API_KEY_P8" > "$HOME/private_keys/AuthKey_${KEY_ID}.p8"
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASS="temp_ci_pass_123"
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security default-keychain -s "$KEYCHAIN_PATH"
+
+      - name: Fetch or create Distribution Certificate & Provisioning Profile
+        working-directory: market_app/ios
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASS="temp_ci_pass_123"
+          fastlane run get_certificates \
+            api_key_path:"$HOME/private_keys" \
+            development:false \
+            generate_apple_certs:true \
+            keychain_path:"$KEYCHAIN_PATH" \
+            keychain_password:"$KEYCHAIN_PASS" || true
+
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH" || true
 
       - name: Flutter pub get
         working-directory: market_app
@@ -91,6 +113,8 @@ jobs:
             -authenticationKeyID "$KEY_ID" \
             -authenticationKeyIssuerID "$ISSUER_ID"
 
-      - name: Remove API key
+      - name: Cleanup Keychain and API key
         if: always()
-        run: rm -f "$HOME/private_keys/AuthKey_${KEY_ID}.p8"
+        run: |
+          rm -f "$HOME/private_keys/AuthKey_${KEY_ID}.p8"
+          security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
