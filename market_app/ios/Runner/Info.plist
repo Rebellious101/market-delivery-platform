@@ -37,8 +37,10 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Teslimat adresinizi harita üzerinden kolayca seçebilmeniz için konum izni gereklidir.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Teslimat adresinizi harita üzerinden kolayca seçebilmeniz için konum izni gereklidir.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
