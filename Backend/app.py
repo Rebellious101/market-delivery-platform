@@ -1216,11 +1216,11 @@ def api_products():
     search_q = request.args.get("q", "").strip()
 
     try:
-        limit = min(max(int(request.args.get("limit", 100)), 1), 200)
+        limit = min(max(int(request.args.get("limit", 500)), 1), 1000)
         page = max(int(request.args.get("page", 1)), 1)
         offset = (page - 1) * limit
     except ValueError:
-        limit = 100
+        limit = 500
         offset = 0
 
     with get_db() as conn:
@@ -1255,8 +1255,8 @@ def api_products():
                 params.append(int(subcategory_id))
 
             if search_q:
-                base_query += " AND (products.name LIKE %s OR products.description LIKE %s)"
-                params.extend([f"%{search_q}%", f"%{search_q}%"])
+                base_query += " AND (products.name LIKE %s OR products.description LIKE %s OR categories.name LIKE %s OR COALESCE(subcategories.name, '') LIKE %s)"
+                params.extend([f"%{search_q}%", f"%{search_q}%", f"%{search_q}%", f"%{search_q}%"])
 
             base_query += " ORDER BY products.id DESC LIMIT %s OFFSET %s"
             params.extend([limit, offset])

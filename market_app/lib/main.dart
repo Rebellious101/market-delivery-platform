@@ -262,10 +262,12 @@ class _MarketHomePageState extends State<MarketHomePage> {
   Future<List<Product>> _fetchProducts({int? categoryId}) async {
     try {
       final isFavorites = categoryId == favoritesCategoryId;
+      final queryParams = <String, String>{'limit': '500'};
+      if (categoryId != null && !isFavorites) {
+        queryParams['category_id'] = categoryId.toString();
+      }
       final uri = Uri.parse('${AppConstants.baseUrl}/api/products').replace(
-        queryParameters: (categoryId == null || isFavorites)
-            ? null
-            : {'category_id': categoryId.toString()},
+        queryParameters: queryParams,
       );
       final response = await http.get(uri).timeout(const Duration(seconds: 10));
 
@@ -330,6 +332,25 @@ class _MarketHomePageState extends State<MarketHomePage> {
     } catch (_) {
       return const <Category>[];
     }
+  }
+
+  String _normalizeSearchText(String input) {
+    return input
+        .trim()
+        .replaceAll('İ', 'i')
+        .replaceAll('I', 'i')
+        .replaceAll('ı', 'i')
+        .replaceAll('Ş', 's')
+        .replaceAll('ş', 's')
+        .replaceAll('Ğ', 'g')
+        .replaceAll('ğ', 'g')
+        .replaceAll('Ü', 'u')
+        .replaceAll('ü', 'u')
+        .replaceAll('Ö', 'o')
+        .replaceAll('ö', 'o')
+        .replaceAll('Ç', 'c')
+        .replaceAll('ç', 'c')
+        .toLowerCase();
   }
 
   void _selectCategory(int? categoryId) {
@@ -1232,15 +1253,17 @@ class _MarketHomePageState extends State<MarketHomePage> {
         }
 
         final products = snapshot.data ?? <Product>[];
-        final query = _searchQuery.trim().toLowerCase();
+        final query = _normalizeSearchText(_searchQuery);
         final subFilter = _selectedSubcategory;
         final filtered = products.where((p) {
           if (subFilter != null && !p.matchesSubcategory(subFilter)) {
             return false;
           }
           if (query.isNotEmpty) {
-            return p.title.toLowerCase().contains(query) ||
-                p.description.toLowerCase().contains(query);
+            return _normalizeSearchText(p.title).contains(query) ||
+                _normalizeSearchText(p.description).contains(query) ||
+                _normalizeSearchText(p.category).contains(query) ||
+                _normalizeSearchText(p.subcategory).contains(query);
           }
           return true;
         }).toList();
