@@ -1698,6 +1698,11 @@ class _MarketHomePageState extends State<MarketHomePage> {
             _buildProductRequestSection(strings),
 
             if (isAuthenticated) ...[
+              _buildProfileMenuItem(
+                icon: Icons.manage_accounts_outlined,
+                title: strings.accountSettings,
+                onTap: () => _showAccountSettingsSheet(strings),
+              ),
               const SizedBox(height: 12),
               _buildProfileMenuItem(
                 icon: Icons.logout_rounded,
@@ -1712,12 +1717,6 @@ class _MarketHomePageState extends State<MarketHomePage> {
                   }
                 },
               ),
-              _buildProfileMenuItem(
-                icon: Icons.delete_forever_rounded,
-                title: strings.deleteAccount,
-                color: Colors.red.shade700,
-                onTap: () => _confirmDeleteAccount(strings),
-              ),
             ],
           ],
         );
@@ -1725,32 +1724,137 @@ class _MarketHomePageState extends State<MarketHomePage> {
     );
   }
 
-  Future<void> _confirmDeleteAccount(AppStrings strings) async {
-    final confirmed = await showDialog<bool>(
+  void _showAccountSettingsSheet(AppStrings strings) {
+    showModalBottomSheet<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
-          strings.deleteAccountConfirmTitle,
-          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
-        ),
-        content: Text(
-          strings.deleteAccountConfirmBody,
-          style: const TextStyle(fontSize: 14, height: 1.4),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(strings.cancel),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    strings.accountSettings,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: CircleAvatar(
+                  backgroundColor: Colors.red.withValues(alpha: 0.1),
+                  child: const Icon(
+                    Icons.delete_forever_rounded,
+                    color: Colors.red,
+                  ),
+                ),
+                title: Text(
+                  strings.deleteAccount,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: Colors.red,
+                  ),
+                ),
+                subtitle: Text(
+                  strings.deleteAccountConfirmBody,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _confirmDeleteAccount(strings);
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            child: Text(strings.delete),
-          ),
-        ],
+        ),
       ),
     );
+  }
+
+  Future<void> _confirmDeleteAccount(AppStrings strings) async {
+    final confirmController = TextEditingController();
+    final confirmWord = strings.deleteAccountConfirmWord;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final isMatch =
+              confirmController.text.trim().toUpperCase() == confirmWord;
+          return AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            title: Text(
+              strings.deleteAccountConfirmTitle,
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  strings.deleteAccountConfirmBody,
+                  style: const TextStyle(fontSize: 14, height: 1.4),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: confirmController,
+                  onChanged: (_) => setDialogState(() {}),
+                  decoration: InputDecoration(
+                    hintText: strings.deleteAccountTypeHint,
+                    hintStyle: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade500,
+                    ),
+                    filled: true,
+                    fillColor: const Color(0xFFF7FAF8),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: Color(0xFFDDE2E6)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(strings.cancel),
+              ),
+              FilledButton(
+                onPressed: isMatch ? () => Navigator.pop(ctx, true) : null,
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                child: Text(strings.delete),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    confirmController.dispose();
     if (confirmed != true || !mounted) return;
 
     final token = SessionManager.instance.token;
