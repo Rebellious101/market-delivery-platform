@@ -59,14 +59,13 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
           security default-keychain -s "$KEYCHAIN_PATH"
 
-      - name: Fetch or create Signing Certificates & Provisioning Profiles
+      - name: Fetch or create Distribution Certificate & App Store Profile
         working-directory: market_app/ios
         run: |
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           KEYCHAIN_PASS="temp_ci_pass_123"
           API_JSON="$HOME/private_keys/api_key.json"
 
-          # Distribution sertifikası ve App Store profili oluştur / indir
           fastlane run get_certificates \
             api_key_path:"$API_JSON" \
             development:false \
@@ -77,16 +76,9 @@ jobs:
           fastlane run get_provisioning_profile \
             api_key_path:"$API_JSON" \
             app_identifier:"com.prestijmarket.app" \
+            provisioning_name:"com.prestijmarket.app AppStore" \
             development:false \
             force:true
-
-          # Automatic signing archive aşaması için Development sertifikası da bulunsun
-          fastlane run get_certificates \
-            api_key_path:"$API_JSON" \
-            development:true \
-            generate_apple_certs:true \
-            keychain_path:"$KEYCHAIN_PATH" \
-            keychain_password:"$KEYCHAIN_PASS" || true
 
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
@@ -104,21 +96,25 @@ jobs:
       - name: Archive
         working-directory: market_app/ios
         run: |
-          PROFILE_NAME="com.prestijmarket.app AppStore"
-          xcodebuild archive \
+          set -o pipefail
+          if ! xcodebuild archive \
             -workspace Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
             -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$HOME/private_keys/AuthKey_${KEY_ID}.p8" \
-            -authenticationKeyID "$KEY_ID" \
-            -authenticationKeyIssuerID "$ISSUER_ID"
+            -archivePath "$RUNNER_TEMP/Runner.xcarchive" 2>&1 | tee "$RUNNER_TEMP/archive.log"; then
+            echo "### Xcode Archive Error Output" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep -E "error:|warning:.*Signing|Provisioning|certificate" "$RUNNER_TEMP/archive.log" | tail -n 80 >> "$GITHUB_STEP_SUMMARY" || true
+            tail -n 60 "$RUNNER_TEMP/archive.log" >> "$GITHUB_STEP_SUMMARY" || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 65
+          fi
 
       - name: Export and upload to App Store Connect (TestFlight)
         working-directory: market_app/ios
         run: |
+          set -o pipefail
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -131,20 +127,32 @@ jobs:
             <key>teamID</key>
             <string>${TEAM_ID}</string>
             <key>signingStyle</key>
-            <string>automatic</string>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.prestijmarket.app</key>
+              <string>com.prestijmarket.app AppStore</string>
+            </dict>
             <key>uploadSymbols</key>
             <true/>
           </dict>
           </plist>
           EOF
-          xcodebuild -exportArchive \
+          if ! xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
             -exportPath "$RUNNER_TEMP/export" \
-            -allowProvisioningUpdates \
             -authenticationKeyPath "$HOME/private_keys/AuthKey_${KEY_ID}.p8" \
             -authenticationKeyID "$KEY_ID" \
-            -authenticationKeyIssuerID "$ISSUER_ID"
+            -authenticationKeyIssuerID "$ISSUER_ID" 2>&1 | tee "$RUNNER_TEMP/export.log"; then
+            echo "### Xcode Export Error Output" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 80 "$RUNNER_TEMP/export.log" >> "$GITHUB_STEP_SUMMARY" || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Cleanup Keychain and API key
         if: always()
