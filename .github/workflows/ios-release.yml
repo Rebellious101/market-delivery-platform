@@ -12,6 +12,8 @@ jobs:
       KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
       ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
       TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      PROFILE_SPECIFIER: "com.prestijmarket.app AppStore"
+      APP_BUNDLE_ID: "com.prestijmarket.app"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,13 +61,14 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
           security default-keychain -s "$KEYCHAIN_PATH"
 
-      - name: Fetch or create Distribution Certificate & App Store Profile
+      - name: Fetch Distribution Certificate & Provisioning Profile
         working-directory: market_app/ios
         run: |
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           KEYCHAIN_PASS="temp_ci_pass_123"
           API_JSON="$HOME/private_keys/api_key.json"
 
+          # 1. Apple Distribution sertifikasını indir / yükle
           fastlane run get_certificates \
             api_key_path:"$API_JSON" \
             development:false \
@@ -73,41 +76,98 @@ jobs:
             keychain_path:"$KEYCHAIN_PATH" \
             keychain_password:"$KEYCHAIN_PASS"
 
+          # 2. Mevcut "com.prestijmarket.app AppStore" profilini yeni profil üretmeden (readonly:true) indir
           fastlane run get_provisioning_profile \
             api_key_path:"$API_JSON" \
-            app_identifier:"com.prestijmarket.app" \
-            provisioning_name:"com.prestijmarket.app AppStore" \
+            app_identifier:"$APP_BUNDLE_ID" \
+            provisioning_name:"$PROFILE_SPECIFIER" \
             development:false \
-            force:true \
+            readonly:true \
             output_path:"$RUNNER_TEMP" \
             filename:"AppStore.mobileprovision"
 
-          # Xcode 15 ve Xcode 16+ provisioning profile klasörlerinin her ikisine de UUID ile kopyala
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+
+      - name: Verify Provisioning Profile & Certificate Match
+        working-directory: market_app/ios
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           PROFILE_FILE="$RUNNER_TEMP/AppStore.mobileprovision"
+
+          if [ ! -f "$PROFILE_FILE" ]; then
+            echo "::error::Provisioning profile file not found at $PROFILE_FILE"
+            exit 1
+          fi
+
+          # Profili decode et ve alanları doğrula
           security cms -D -i "$PROFILE_FILE" > "$RUNNER_TEMP/profile.plist"
           PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$RUNNER_TEMP/profile.plist")
           PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$RUNNER_TEMP/profile.plist")
-          echo "Installed Provisioning Profile: $PROFILE_NAME ($PROFILE_UUID)"
-          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
-          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          PROFILE_TEAM=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" "$RUNNER_TEMP/profile.plist")
+          PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" "$RUNNER_TEMP/profile.plist")
 
+          echo "=== PROVISIONING PROFILE METADATA ==="
+          echo "Name                   : $PROFILE_NAME"
+          echo "UUID                   : $PROFILE_UUID"
+          echo "TeamIdentifier         : $PROFILE_TEAM"
+          echo "application-identifier : $PROFILE_APP_ID"
+
+          if [ "$PROFILE_NAME" != "$PROFILE_SPECIFIER" ]; then
+            echo "::error::Profile Name mismatch! Expected '$PROFILE_SPECIFIER', got '$PROFILE_NAME'"
+            exit 1
+          fi
+          if [ "$PROFILE_TEAM" != "$TEAM_ID" ]; then
+            echo "::error::Profile TeamIdentifier mismatch! Expected '$TEAM_ID', got '$PROFILE_TEAM'"
+            exit 1
+          fi
+          if [ "$PROFILE_APP_ID" != "${TEAM_ID}.${APP_BUNDLE_ID}" ]; then
+            echo "::error::Profile application-identifier mismatch! Expected '${TEAM_ID}.${APP_BUNDLE_ID}', got '$PROFILE_APP_ID'"
+            exit 1
+          fi
+
+          # ~/Library/MobileDevice/Provisioning Profiles/ (ve Xcode 16 UserData) dizinine kur ve doğrula
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           mkdir -p "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
-          cp "$PROFILE_FILE" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
-          cp "$PROFILE_FILE" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          cp "$PROFILE_FILE" "$HOME/Library/MobileDevice/Provisioning Profiles/${PROFILE_UUID}.mobileprovision"
+          cp "$PROFILE_FILE" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/${PROFILE_UUID}.mobileprovision"
 
-          fastlane run update_code_signing_settings \
-            use_automatic_signing:false \
-            path:"Runner.xcodeproj" \
-            team_id:"$TEAM_ID" \
-            targets:"Runner" \
-            code_sign_identity:"Apple Distribution" \
-            profile_name:"$PROFILE_NAME" \
-            profile_uuid:"$PROFILE_UUID" \
-            bundle_identifier:"com.prestijmarket.app"
+          echo "=== INSTALLED PROFILES IN ~/Library/MobileDevice/Provisioning Profiles/ ==="
+          ls -la "$HOME/Library/MobileDevice/Provisioning Profiles/"
 
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          # Apple Distribution sertifikası (Keychain'deki private key'li kimlik) ile profildeki sertifikanın eşleştiğini doğrula
+          echo "=== KEYCHAIN SIGNING IDENTITIES ==="
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | tee "$RUNNER_TEMP/identities.txt"
+
+          python3 - <<'PY'
+          import hashlib, os, plistlib, re, subprocess, sys
+
+          runner_temp = os.environ["RUNNER_TEMP"]
+          with open(os.path.join(runner_temp, "profile.plist"), "rb") as f:
+              plist = plistlib.load(f)
+
+          profile_cert_sha1s = [
+              hashlib.sha1(cert_der).hexdigest().upper()
+              for cert_der in plist.get("DeveloperCertificates", [])
+          ]
+          print("Profile DeveloperCertificates SHA-1:", profile_cert_sha1s)
+
+          with open(os.path.join(runner_temp, "identities.txt"), "r") as f:
+              identities_text = f.read()
+
+          keychain_sha1s = re.findall(r'\b([0-9A-Fa-f]{40})\b\s+"Apple Distribution:', identities_text)
+          keychain_sha1s = [s.upper() for s in keychain_sha1s]
+          print("Keychain Apple Distribution SHA-1 (with private key):", keychain_sha1s)
+
+          matched = set(profile_cert_sha1s) & set(keychain_sha1s)
+          if not keychain_sha1s:
+              print("::error::Keychain'de private key'e sahip geçerli bir 'Apple Distribution' sertifikası bulunamadı! (Önceki geçici CI çalışmasında üretilen sertifikanın private key'i runner silinince kaybolmuş.)")
+              sys.exit(1)
+          if not matched:
+              print(f"::error::Profil içindeki sertifika ({profile_cert_sha1s}) ile Keychain'deki sertifika ({keychain_sha1s}) eşleşmiyor!")
+              sys.exit(1)
+
+          print(f"Verified matching certificate SHA-1: {list(matched)}")
+          PY
 
       - name: Flutter pub get
         working-directory: market_app
@@ -128,7 +188,11 @@ jobs:
             -scheme Runner \
             -configuration Release \
             -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/Runner.xcarchive" 2>&1 | tee "$RUNNER_TEMP/archive.log"; then
+            -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_SPECIFIER" 2>&1 | tee "$RUNNER_TEMP/archive.log"; then
             echo "=== XCODE ARCHIVE ERRORS ==="
             grep -E "error:|warning:.*Signing|Provisioning|certificate|requires a" "$RUNNER_TEMP/archive.log" || true
             echo "### Xcode Archive Error Output" >> "$GITHUB_STEP_SUMMARY"
@@ -161,7 +225,7 @@ jobs:
             <key>provisioningProfiles</key>
             <dict>
               <key>com.prestijmarket.app</key>
-              <string>${PROFILE_UUID}</string>
+              <string>${PROFILE_SPECIFIER}</string>
             </dict>
             <key>uploadSymbols</key>
             <true/>
