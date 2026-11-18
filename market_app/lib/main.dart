@@ -1712,11 +1712,97 @@ class _MarketHomePageState extends State<MarketHomePage> {
                   }
                 },
               ),
+              _buildProfileMenuItem(
+                icon: Icons.delete_forever_rounded,
+                title: strings.deleteAccount,
+                color: Colors.red.shade700,
+                onTap: () => _confirmDeleteAccount(strings),
+              ),
             ],
           ],
         );
       },
     );
+  }
+
+  Future<void> _confirmDeleteAccount(AppStrings strings) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          strings.deleteAccountConfirmTitle,
+          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
+        ),
+        content: Text(
+          strings.deleteAccountConfirmBody,
+          style: const TextStyle(fontSize: 14, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(strings.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: Text(strings.delete),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final token = SessionManager.instance.token;
+    if (token == null || token.isEmpty) return;
+
+    try {
+      final response = await http
+          .delete(
+            Uri.parse('${AppConstants.baseUrl}/api/auth/account'),
+            headers: {'Authorization': 'Bearer $token'},
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        try {
+          await FirebaseAuth.instance.currentUser?.delete();
+        } catch (_) {
+          try {
+            await FirebaseAuth.instance.signOut();
+          } catch (_) {}
+        }
+        if (widget.onLogout != null) {
+          widget.onLogout!();
+        } else {
+          SessionManager.instance.clearSession();
+          AddressBook.instance.clear();
+        }
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(strings.deleteAccountSuccess),
+            backgroundColor: AppConstants.primaryColor,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Hesap silinemedi. Lütfen tekrar deneyin.'),
+            backgroundColor: Colors.red.shade600,
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Sunucuya bağlanılamadı.'),
+          backgroundColor: Colors.red.shade600,
+        ),
+      );
+    }
   }
 
   Future<void> _submitProductRequest(AppStrings strings) async {

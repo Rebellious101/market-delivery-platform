@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>CLIENT_ID</key>
-	<string>28023880651-fg10bo98bq92m2gsh4miulffqjadrcai.apps.googleusercontent.com</string>
+	<string>28023880651-cochmk1uhiej7q0tkbq01li12e62p4m0.apps.googleusercontent.com</string>
 	<key>REVERSED_CLIENT_ID</key>
-	<string>com.googleusercontent.apps.28023880651-fg10bo98bq92m2gsh4miulffqjadrcai</string>
+	<string>com.googleusercontent.apps.28023880651-cochmk1uhiej7q0tkbq01li12e62p4m0</string>
 	<key>ANDROID_CLIENT_ID</key>
-	<string>28023880651-ahbd7lqrrosmcqtvijcce99rfm7a98dl.apps.googleusercontent.com</string>
+	<string>28023880651-4vljod5ih9k7307cf3rhltkim4b00kqk.apps.googleusercontent.com</string>
 	<key>API_KEY</key>
 	<string>AIzaSyAd8OYzSK6npMUCjBVc11HH9Eqz2Rkh6VM</string>
 	<key>GCM_SENDER_ID</key>
@@ -15,7 +15,7 @@
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>com.example.marketApp</string>
+	<string>com.prestijmarket.app</string>
 	<key>PROJECT_ID</key>
 	<string>my-delivery-app-832ac</string>
 	<key>STORAGE_BUCKET</key>
@@ -31,6 +31,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:28023880651:ios:434667f73e8b9345e3d44e</string>
+	<string>1:28023880651:ios:1dc459710a5ef832e3d44e</string>
 </dict>
 </plist>

@@ -1168,6 +1168,28 @@ def api_reset_password_phone():
             cursor.close()
 
 
+@app.delete("/api/auth/account")
+@token_required
+def api_delete_account():
+    """Kullanıcının kendi hesabını ve kayıtlı adreslerini kalıcı olarak siler."""
+    user_id = request.current_user["user_id"]
+    with get_db() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
+            conn.commit()
+            if cursor.rowcount == 0:
+                return jsonify({"success": False, "error": "Kullanıcı bulunamadı."}), 404
+            logger.info(f"Kullanıcı #{user_id} kendi hesabını sildi.")
+            return jsonify({"success": True, "message": "Hesabınız kalıcı olarak silindi."}), 200
+        except Exception:
+            conn.rollback()
+            logger.exception("Hesap silme hatası")
+            return jsonify({"success": False, "error": "Hesap silinemedi."}), 500
+        finally:
+            cursor.close()
+
+
 @app.get("/api/categories")
 def api_categories():
     with get_db() as conn:

@@ -179,4 +179,15 @@ class AppStrings {
   String get tobaccoLimitMessage => isEnglish
       ? 'You can add at most 2 packs of cigarettes per order.'
       : 'Bir siparişte en fazla 2 paket sigara ekleyebilirsiniz.';
+  String get deleteAccount => isEnglish ? 'Delete Account' : 'Hesabımı Sil';
+  String get deleteAccountConfirmTitle =>
+      isEnglish ? 'Delete Account?' : 'Hesabınızı silmek istediğinize emin misiniz?';
+  String get deleteAccountConfirmBody => isEnglish
+      ? 'Your account and saved addresses will be permanently deleted. This action cannot be undone.'
+      : 'Hesabınız ve kayıtlı adresleriniz kalıcı olarak silinecektir. Bu işlem geri alınamaz.';
+  String get deleteAccountSuccess => isEnglish
+      ? 'Your account has been permanently deleted.'
+      : 'Hesabınız kalıcı olarak silindi.';
+  String get cancel => isEnglish ? 'Cancel' : 'Vazgeç';
+  String get delete => isEnglish ? 'Delete' : 'Sil';
 }
