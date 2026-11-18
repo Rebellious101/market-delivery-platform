@@ -35,6 +35,22 @@ jobs:
           mkdir -p "$HOME/private_keys"
           printf '%s\n' "$API_KEY_P8" > "$HOME/private_keys/AuthKey_${KEY_ID}.p8"
 
+          python3 - <<'PY'
+          import json, os
+          key_id = os.environ["KEY_ID"].strip()
+          issuer_id = os.environ["ISSUER_ID"].strip()
+          key_content = os.environ["API_KEY_P8"].strip()
+          api_json_path = os.path.expanduser("~/private_keys/api_key.json")
+          with open(api_json_path, "w") as f:
+              json.dump({
+                  "key_id": key_id,
+                  "issuer_id": issuer_id,
+                  "key": key_content,
+                  "duration": 1200,
+                  "in_house": False,
+              }, f)
+          PY
+
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           KEYCHAIN_PASS="temp_ci_pass_123"
           security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
@@ -43,19 +59,37 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
           security default-keychain -s "$KEYCHAIN_PATH"
 
-      - name: Fetch or create Distribution Certificate & Provisioning Profile
+      - name: Fetch or create Signing Certificates & Provisioning Profiles
         working-directory: market_app/ios
         run: |
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           KEYCHAIN_PASS="temp_ci_pass_123"
+          API_JSON="$HOME/private_keys/api_key.json"
+
+          # Distribution sertifikası ve App Store profili oluştur / indir
           fastlane run get_certificates \
-            api_key_path:"$HOME/private_keys" \
+            api_key_path:"$API_JSON" \
             development:false \
+            generate_apple_certs:true \
+            keychain_path:"$KEYCHAIN_PATH" \
+            keychain_password:"$KEYCHAIN_PASS"
+
+          fastlane run get_provisioning_profile \
+            api_key_path:"$API_JSON" \
+            app_identifier:"com.prestijmarket.app" \
+            development:false \
+            force:true
+
+          # Automatic signing archive aşaması için Development sertifikası da bulunsun
+          fastlane run get_certificates \
+            api_key_path:"$API_JSON" \
+            development:true \
             generate_apple_certs:true \
             keychain_path:"$KEYCHAIN_PATH" \
             keychain_password:"$KEYCHAIN_PASS" || true
 
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH" || true
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
       - name: Flutter pub get
         working-directory: market_app
@@ -70,6 +104,7 @@ jobs:
       - name: Archive
         working-directory: market_app/ios
         run: |
+          PROFILE_NAME="com.prestijmarket.app AppStore"
           xcodebuild archive \
             -workspace Runner.xcworkspace \
             -scheme Runner \
@@ -79,9 +114,7 @@ jobs:
             -allowProvisioningUpdates \
             -authenticationKeyPath "$HOME/private_keys/AuthKey_${KEY_ID}.p8" \
             -authenticationKeyID "$KEY_ID" \
-            -authenticationKeyIssuerID "$ISSUER_ID" \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
-            CODE_SIGN_STYLE=Automatic
+            -authenticationKeyIssuerID "$ISSUER_ID"
 
       - name: Export and upload to App Store Connect (TestFlight)
         working-directory: market_app/ios
@@ -116,5 +149,5 @@ jobs:
       - name: Cleanup Keychain and API key
         if: always()
         run: |
-          rm -f "$HOME/private_keys/AuthKey_${KEY_ID}.p8"
+          rm -rf "$HOME/private_keys"
           security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
