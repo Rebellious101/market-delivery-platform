@@ -1,42 +1,86 @@
 name: iOS Release (TestFlight)
 
-# Sadece elle çalışır: GitHub > Actions > "iOS Release (TestFlight)" > Run workflow
+# Yalnızca elle tetiklenir: GitHub > Actions > "iOS Release (TestFlight)" > Run workflow
 on:
   workflow_dispatch:
 
 jobs:
   build-ios:
+    name: Build, Sign & Upload iOS to TestFlight
     runs-on: macos-15-intel
     timeout-minutes: 60
     env:
-      KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
-      ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
-      TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      RAW_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+      RAW_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+      RAW_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       PROFILE_SPECIFIER: "com.prestijmarket.app AppStore"
       APP_BUNDLE_ID: "com.prestijmarket.app"
+
     steps:
-      - name: Checkout
+      # -----------------------------------------------------------------------
+      # ADIM 1: Kaynak Kodu İndir
+      # -----------------------------------------------------------------------
+      - name: 1. Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Select latest stable Xcode
+      # -----------------------------------------------------------------------
+      # ADIM 2: Kararlı Xcode Sürümünü Seç
+      # -----------------------------------------------------------------------
+      - name: 2. Select Latest Stable Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
 
-      - name: Setup Flutter
+      # -----------------------------------------------------------------------
+      # ADIM 3: Flutter SDK Kurulumu
+      # -----------------------------------------------------------------------
+      - name: 3. Setup Flutter SDK
         uses: subosito/flutter-action@v2
         with:
           flutter-version: 3.47.3
           channel: stable
           cache: true
 
-      - name: Setup temporary Keychain & App Store Connect API Key
+      # -----------------------------------------------------------------------
+      # ADIM 4: GitHub Secrets Doğrulama, Temizleme ve Geçici Keychain Kurulumu
+      # -----------------------------------------------------------------------
+      - name: 4. Validate Secrets, Setup Keychain & App Store Connect API Key
         env:
           API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
         run: |
           set -euo pipefail
+
+          # GitHub Secrets içine kopyalanırken oluşabilecek boşluk, \r, \n veya başlık satırlarını temizle
+          CLEAN_TEAM_ID=$(printf '%s\n' "$RAW_TEAM_ID" | tr -d '\r' | grep -Eo '[A-Z0-9]{10}' | tail -n 1 || true)
+          CLEAN_KEY_ID=$(printf '%s\n' "$RAW_KEY_ID" | tr -d '\r' | grep -Eo '[A-Z0-9]{10}' | tail -n 1 || true)
+          CLEAN_ISSUER_ID=$(printf '%s\n' "$RAW_ISSUER_ID" | tr -d '\r' | grep -Eo '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' | head -n 1 || true)
+
+          if [ -z "$CLEAN_TEAM_ID" ]; then
+            echo "::error::APPLE_TEAM_ID secret geçerli bir 10 karakterlik Apple Team ID içermiyor!"
+            exit 1
+          fi
+          if [ -z "$CLEAN_KEY_ID" ]; then
+            echo "::error::APPSTORE_KEY_ID secret geçerli bir 10 karakterlik Key ID içermiyor!"
+            exit 1
+          fi
+          if [ -z "$CLEAN_ISSUER_ID" ]; then
+            echo "::error::APPSTORE_ISSUER_ID secret geçerli bir UUID formatında Issuer ID içermiyor!"
+            exit 1
+          fi
+
+          echo "TEAM_ID=$CLEAN_TEAM_ID" >> "$GITHUB_ENV"
+          echo "KEY_ID=$CLEAN_KEY_ID" >> "$GITHUB_ENV"
+          echo "ISSUER_ID=$CLEAN_ISSUER_ID" >> "$GITHUB_ENV"
+
+          echo "Secrets format check passed (Team ID length: ${#CLEAN_TEAM_ID}, Key ID length: ${#CLEAN_KEY_ID}, Issuer ID length: ${#CLEAN_ISSUER_ID})."
+
           mkdir -p "$HOME/private_keys"
-          printf '%s\n' "$API_KEY_P8" > "$HOME/private_keys/AuthKey_${KEY_ID}.p8"
+          printf '%s\n' "$API_KEY_P8" | tr -d '\r' > "$HOME/private_keys/AuthKey_${CLEAN_KEY_ID}.p8"
+
+          if ! grep -q "BEGIN PRIVATE KEY" "$HOME/private_keys/AuthKey_${CLEAN_KEY_ID}.p8"; then
+            echo "::error::APPSTORE_API_KEY_P8 secret geçerli bir .p8 (-----BEGIN PRIVATE KEY-----) içeriğine sahip değil!"
+            exit 1
+          fi
 
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           KEYCHAIN_PASS="temp_ci_pass_123"
@@ -45,8 +89,12 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
           security default-keychain -s "$KEYCHAIN_PATH"
+          echo "Temporary keychain created and unlocked at $KEYCHAIN_PATH"
 
-      - name: Fetch Distribution Certificate & Provisioning Profile
+      # -----------------------------------------------------------------------
+      # ADIM 5: Apple Distribution Sertifikası ve App Store Profili Hazırlama
+      # -----------------------------------------------------------------------
+      - name: 5. Fetch Distribution Certificate & Provisioning Profile
         working-directory: market_app/ios
         run: |
           set -o pipefail
@@ -88,7 +136,7 @@ jobs:
           }
           base_url = "https://api.appstoreconnect.apple.com/v1"
 
-          # 1. Mevcut DISTRIBUTION sertifikalarını kontrol et (geçici runner'lardan kalan private key'siz sertifikaları temizle)
+          # 1. Geçici runner'lardan kalan private key'siz DISTRIBUTION sertifikalarını temizle
           r = requests.get(
               f"{base_url}/certificates?filter[certificateType]=DISTRIBUTION,IOS_DISTRIBUTION",
               headers=headers,
@@ -100,7 +148,7 @@ jobs:
           for c in existing_certs:
               cid = c["id"]
               cname = c["attributes"].get("displayName") or c["attributes"].get("name")
-              print(f"Removing orphaned CI certificate without local private key: {cid} ({cname})")
+              print(f"Revoking previous ephemeral CI certificate without local private key: {cid} ({cname})")
               del_r = requests.delete(f"{base_url}/certificates/{cid}", headers=headers, timeout=30)
               print(f"Delete cert {cid} status: {del_r.status_code}")
 
@@ -188,8 +236,7 @@ jobs:
           bundle_res_id = bundles[0]["id"]
           print(f"Found Bundle ID resource: {bundle_res_id} ({bundle_id_str})")
 
-          # 4. Fazla üretilmiş "com.prestijmarket.app AppStore 1795026401" ve eski profilleri temizleyip
-          #    yalnızca tek bir "com.prestijmarket.app AppStore" profilini aktif sertifika ile güncelle
+          # 4. Yalnızca tek bir "com.prestijmarket.app AppStore" profilini aktif sertifika ile yenile
           p_r = requests.get(f"{base_url}/profiles", headers=headers, timeout=30)
           p_r.raise_for_status()
           deleted_any = False
@@ -197,7 +244,7 @@ jobs:
               pid = p["id"]
               pname = p["attributes"].get("name", "")
               if pname == profile_name_target or pname.startswith(profile_name_target + " "):
-                  print(f"Cleaning up old/duplicate profile: {pid} ('{pname}')")
+                  print(f"Replacing existing profile: {pid} ('{pname}')")
                   requests.delete(f"{base_url}/profiles/{pid}", headers=headers, timeout=30)
                   deleted_any = True
 
@@ -258,14 +305,17 @@ jobs:
 
             security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
           ) 2>&1 | tee "$RUNNER_TEMP/signing.log"; then
-            echo "### Signing Setup Error" >> "$GITHUB_STEP_SUMMARY"
+            echo "### 5. Signing Setup Error" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             tail -n 120 "$RUNNER_TEMP/signing.log" >> "$GITHUB_STEP_SUMMARY" || true
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-      - name: Verify Provisioning Profile & Certificate Match
+      # -----------------------------------------------------------------------
+      # ADIM 6: Profil Metadata, Team ID ve Sertifika SHA-1 Eşleşme Doğrulaması
+      # -----------------------------------------------------------------------
+      - name: 6. Verify Provisioning Profile & Certificate Match
         working-directory: market_app/ios
         run: |
           set -o pipefail
@@ -280,8 +330,38 @@ jobs:
           import sys
 
           runner_temp = os.environ["RUNNER_TEMP"]
+          expected_name = os.environ["PROFILE_SPECIFIER"].strip()
+          expected_team = os.environ["TEAM_ID"].strip()
+          expected_bundle = os.environ["APP_BUNDLE_ID"].strip()
+          expected_app_id = f"{expected_team}.{expected_bundle}"
+
           with open(os.path.join(runner_temp, "profile.plist"), "rb") as f:
               plist = plistlib.load(f)
+
+          prof_name = str(plist.get("Name", "")).strip()
+          prof_uuid = str(plist.get("UUID", "")).strip()
+          team_list = plist.get("TeamIdentifier", [])
+          prof_team = str(team_list[0]).strip() if team_list else ""
+          entitlements = plist.get("Entitlements", {})
+          prof_app_id = str(entitlements.get("application-identifier", "")).strip()
+
+          print("=== PROVISIONING PROFILE METADATA ===")
+          print(f"Name                   : {prof_name}")
+          print(f"UUID                   : {prof_uuid}")
+          print(f"TeamIdentifier         : {prof_team}")
+          print(f"application-identifier : {prof_app_id}")
+
+          if prof_name != expected_name:
+              print(f"::error::Profile Name mismatch! Expected '{expected_name}', got '{prof_name}'")
+              sys.exit(1)
+
+          if prof_team != expected_team:
+              print(f"::error::Profile TeamIdentifier mismatch! Profile has '{prof_team}' (len={len(prof_team)}), secret has len={len(expected_team)}")
+              sys.exit(1)
+
+          if prof_app_id != expected_app_id:
+              print(f"::error::Profile application-identifier mismatch! Expected '{expected_app_id}', got '{prof_app_id}'")
+              sys.exit(1)
 
           profile_cert_sha1s = [
               hashlib.sha1(cert_der).hexdigest().upper()
@@ -298,7 +378,7 @@ jobs:
 
           matched = set(profile_cert_sha1s) & set(keychain_sha1s)
           if not keychain_sha1s:
-              print("::error::Keychain'de private key'e sahip geçerli bir Distribution sertifikası bulunamadı!")
+              print("::error::Keychain'de private key'e sahip geçerli bir Apple Distribution sertifikası bulunamadı!")
               sys.exit(1)
           if not matched:
               print(f"::error::Profil içindeki sertifika ({profile_cert_sha1s}) ile Keychain'deki sertifika ({keychain_sha1s}) eşleşmiyor!")
@@ -314,34 +394,11 @@ jobs:
               exit 1
             fi
 
-            # Profili decode et ve alanları doğrula
             security cms -D -i "$PROFILE_FILE" > "$RUNNER_TEMP/profile.plist"
-            PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$RUNNER_TEMP/profile.plist")
-            PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$RUNNER_TEMP/profile.plist")
-            PROFILE_TEAM=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" "$RUNNER_TEMP/profile.plist")
-            PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" "$RUNNER_TEMP/profile.plist")
-
-            echo "=== PROVISIONING PROFILE METADATA ==="
-            echo "Name                   : $PROFILE_NAME"
-            echo "UUID                   : $PROFILE_UUID"
-            echo "TeamIdentifier         : $PROFILE_TEAM"
-            echo "application-identifier : $PROFILE_APP_ID"
+            PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$RUNNER_TEMP/profile.plist" | tr -d '\r\n ')
             echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
 
-            if [ "$PROFILE_NAME" != "$PROFILE_SPECIFIER" ]; then
-              echo "::error::Profile Name mismatch! Expected '$PROFILE_SPECIFIER', got '$PROFILE_NAME'"
-              exit 1
-            fi
-            if [ "$PROFILE_TEAM" != "$TEAM_ID" ]; then
-              echo "::error::Profile TeamIdentifier mismatch! Expected '$TEAM_ID', got '$PROFILE_TEAM'"
-              exit 1
-            fi
-            if [ "$PROFILE_APP_ID" != "${TEAM_ID}.${APP_BUNDLE_ID}" ]; then
-              echo "::error::Profile application-identifier mismatch! Expected '${TEAM_ID}.${APP_BUNDLE_ID}', got '$PROFILE_APP_ID'"
-              exit 1
-            fi
-
-            # ~/Library/MobileDevice/Provisioning Profiles/ (ve Xcode 16 UserData) dizinine kur ve doğrula
+            # Hem klasik Xcode hem Xcode 16+ dizinlerine kur
             mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
             mkdir -p "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
             cp "$PROFILE_FILE" "$HOME/Library/MobileDevice/Provisioning Profiles/${PROFILE_UUID}.mobileprovision"
@@ -350,12 +407,12 @@ jobs:
             echo "=== INSTALLED PROFILES IN ~/Library/MobileDevice/Provisioning Profiles/ ==="
             ls -la "$HOME/Library/MobileDevice/Provisioning Profiles/"
 
-            # Apple Distribution sertifikası (Keychain'deki private key'li kimlik) ile profildeki sertifikanın eşleştiğini doğrula
             echo "=== KEYCHAIN SIGNING IDENTITIES ==="
             security find-identity -v -p codesigning "$KEYCHAIN_PATH" | tee "$RUNNER_TEMP/identities.txt"
+
             python3 "$RUNNER_TEMP/verify_signing.py"
 
-            # Sadece Runner hedefinin imzalama ayarlarını doğrula (SPM paket hedeflerine dokunmaz)
+            # Yalnızca Runner hedefinin imzalama ayarlarını güncelle (SPM paket hedeflerine dokunmaz)
             fastlane run update_code_signing_settings \
               use_automatic_signing:false \
               path:"Runner.xcodeproj" \
@@ -366,24 +423,33 @@ jobs:
               profile_uuid:"$PROFILE_UUID" \
               bundle_identifier:"$APP_BUNDLE_ID"
           ) 2>&1 | tee "$RUNNER_TEMP/verify.log"; then
-            echo "### Profile & Certificate Verification Error" >> "$GITHUB_STEP_SUMMARY"
+            echo "### 6. Profile & Certificate Verification Error" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             tail -n 120 "$RUNNER_TEMP/verify.log" >> "$GITHUB_STEP_SUMMARY" || true
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-      - name: Flutter pub get
+      # -----------------------------------------------------------------------
+      # ADIM 7: Flutter & iOS Bağımlılıklarını Çözümle
+      # -----------------------------------------------------------------------
+      - name: 7. Flutter Pub Get & iOS Config
         working-directory: market_app
         run: |
-          flutter config --enable-swift-package-manager
-          flutter pub get
+          set -o pipefail
+          {
+            flutter config --enable-swift-package-manager
+            flutter pub get
+            flutter build ios --release --no-codesign --build-number=${{ github.run_number }}
+          } 2>&1 | tee "$RUNNER_TEMP/flutter_build.log"
 
-      - name: Generate iOS build config (no codesign)
-        working-directory: market_app
-        run: flutter build ios --release --no-codesign --build-number=${{ github.run_number }}
-
-      - name: Archive
+      # -----------------------------------------------------------------------
+      # ADIM 8: Xcode Archive (.xcarchive) Oluştur
+      # Not: CODE_SIGN_STYLE=Manual, DEVELOPMENT_TEAM, CODE_SIGN_IDENTITY ve
+      # PROVISIONING_PROFILE_SPECIFIER değerleri project.pbxproj içinde yalnızca
+      # Runner hedefinde tanımlıdır; böylece SPM paket hedefleri profil hatası vermez.
+      # -----------------------------------------------------------------------
+      - name: 8. Xcode Archive (Runner.xcarchive)
         working-directory: market_app/ios
         run: |
           set -o pipefail
@@ -392,14 +458,10 @@ jobs:
             -scheme Runner \
             -configuration Release \
             -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
-            CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_SPECIFIER" 2>&1 | tee "$RUNNER_TEMP/archive.log"; then
+            -archivePath "$RUNNER_TEMP/Runner.xcarchive" 2>&1 | tee "$RUNNER_TEMP/archive.log"; then
             echo "=== XCODE ARCHIVE ERRORS ==="
             grep -E "error:|warning:.*Signing|Provisioning|certificate|requires a" "$RUNNER_TEMP/archive.log" || true
-            echo "### Xcode Archive Error Output" >> "$GITHUB_STEP_SUMMARY"
+            echo "### 8. Xcode Archive Error Output" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             grep -E "error:|warning:.*Signing|Provisioning|certificate|requires a" "$RUNNER_TEMP/archive.log" | tail -n 80 >> "$GITHUB_STEP_SUMMARY" || true
             tail -n 60 "$RUNNER_TEMP/archive.log" >> "$GITHUB_STEP_SUMMARY" || true
@@ -407,7 +469,10 @@ jobs:
             exit 65
           fi
 
-      - name: Export and upload to App Store Connect (TestFlight)
+      # -----------------------------------------------------------------------
+      # ADIM 9: IPA Dışa Aktar ve App Store Connect (TestFlight)'e Yükle
+      # -----------------------------------------------------------------------
+      - name: 9. Export Signed IPA & Upload to TestFlight
         working-directory: market_app/ios
         run: |
           set -o pipefail
@@ -436,6 +501,7 @@ jobs:
           </dict>
           </plist>
           EOF
+
           if ! xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
@@ -443,21 +509,33 @@ jobs:
             -authenticationKeyPath "$HOME/private_keys/AuthKey_${KEY_ID}.p8" \
             -authenticationKeyID "$KEY_ID" \
             -authenticationKeyIssuerID "$ISSUER_ID" 2>&1 | tee "$RUNNER_TEMP/export.log"; then
-            echo "### Xcode Export Error Output" >> "$GITHUB_STEP_SUMMARY"
+            echo "### 9. Xcode Export & Upload Error Output" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
-            tail -n 80 "$RUNNER_TEMP/export.log" >> "$GITHUB_STEP_SUMMARY" || true
+            tail -n 100 "$RUNNER_TEMP/export.log" >> "$GITHUB_STEP_SUMMARY" || true
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-      - name: Upload build logs on failure
-        if: failure()
+          echo "### ✅ TestFlight Upload Succeeded!" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Bundle ID:** \`${APP_BUNDLE_ID}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Provisioning Profile:** \`${PROFILE_SPECIFIER}\` (\`${PROFILE_UUID}\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Build Number:** \`${{ github.run_number }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # -----------------------------------------------------------------------
+      # ADIM 10: Hata veya Başarı Durumunda Logları Artifact Olarak Kaydet
+      # -----------------------------------------------------------------------
+      - name: 10. Upload Build Logs Artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: xcode-build-logs
           path: ${{ runner.temp }}/*.log
+          if-no-files-found: ignore
 
-      - name: Cleanup Keychain and API key
+      # -----------------------------------------------------------------------
+      # ADIM 11: Geçici Keychain ve API Anahtarını Temizle
+      # -----------------------------------------------------------------------
+      - name: 11. Cleanup Keychain and API Key
         if: always()
         run: |
           rm -rf "$HOME/private_keys"
