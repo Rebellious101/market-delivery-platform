@@ -53,15 +53,16 @@ jobs:
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           KEYCHAIN_PASS="temp_ci_pass_123"
 
-          pip3 install --quiet pyjwt cryptography requests
-
-          if ! python3 - <<'PY' 2>&1 | tee "$RUNNER_TEMP/signing.log"; then
-          import base64, os, subprocess, sys, time
-          import jwt, requests
+          cat <<'PY' > "$RUNNER_TEMP/setup_signing.py"
+          import base64
+          import os
+          import subprocess
+          import time
+          import jwt
+          import requests
 
           key_id = os.environ["KEY_ID"].strip()
           issuer_id = os.environ["ISSUER_ID"].strip()
-          team_id = os.environ["TEAM_ID"].strip()
           bundle_id_str = os.environ["APP_BUNDLE_ID"].strip()
           profile_name_target = os.environ["PROFILE_SPECIFIER"].strip()
           runner_temp = os.environ["RUNNER_TEMP"]
@@ -88,7 +89,11 @@ jobs:
           base_url = "https://api.appstoreconnect.apple.com/v1"
 
           # 1. Mevcut DISTRIBUTION sertifikalarını kontrol et (geçici runner'lardan kalan private key'siz sertifikaları temizle)
-          r = requests.get(f"{base_url}/certificates?filter[certificateType]=DISTRIBUTION,IOS_DISTRIBUTION", headers=headers)
+          r = requests.get(
+              f"{base_url}/certificates?filter[certificateType]=DISTRIBUTION,IOS_DISTRIBUTION",
+              headers=headers,
+              timeout=30,
+          )
           r.raise_for_status()
           existing_certs = r.json().get("data", [])
           print(f"Found {len(existing_certs)} existing Distribution certificate(s) on portal.")
@@ -96,7 +101,7 @@ jobs:
               cid = c["id"]
               cname = c["attributes"].get("displayName") or c["attributes"].get("name")
               print(f"Removing orphaned CI certificate without local private key: {cid} ({cname})")
-              del_r = requests.delete(f"{base_url}/certificates/{cid}", headers=headers)
+              del_r = requests.delete(f"{base_url}/certificates/{cid}", headers=headers, timeout=30)
               print(f"Delete cert {cid} status: {del_r.status_code}")
 
           # 2. Yeni RSA-2048 Private Key ve CSR üret, tek bir Apple Distribution sertifikası oluştur
@@ -107,16 +112,20 @@ jobs:
           p12_file = os.path.join(runner_temp, "dist.p12")
           p12_pass = "ci_p12_pass_123"
 
-          subprocess.run([
-              "openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes",
-              "-keyout", key_file, "-out", csr_file,
-              "-subj", "/CN=Prestij Market Distribution/O=Prestij Market/C=TR"
-          ], check=True)
+          subprocess.run(
+              [
+                  "openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes",
+                  "-keyout", key_file, "-out", csr_file,
+                  "-subj", "/CN=Prestij Market Distribution/O=Prestij Market/C=TR",
+              ],
+              check=True,
+          )
 
           with open(csr_file, "r") as f:
               csr_pem = f.read()
           csr_body = "".join(
-              line.strip() for line in csr_pem.splitlines()
+              line.strip()
+              for line in csr_pem.splitlines()
               if not line.startswith("-----")
           )
 
@@ -132,6 +141,7 @@ jobs:
                       },
                   }
               },
+              timeout=30,
           )
           if create_cert_r.status_code >= 300:
               print("Create certificate error:", create_cert_r.text)
@@ -145,17 +155,34 @@ jobs:
           with open(cer_der_file, "wb") as f:
               f.write(base64.b64decode(cert_content_b64))
 
-          subprocess.run(["openssl", "x509", "-inform", "DER", "-in", cer_der_file, "-out", cer_pem_file], check=True)
-          subprocess.run([
-              "openssl", "pkcs12", "-export", "-legacy",
-              "-inkey", key_file, "-in", cer_pem_file,
-              "-out", p12_file, "-passout", f"pass:{p12_pass}"
-          ], check=True)
+          subprocess.run(
+              ["openssl", "x509", "-inform", "DER", "-in", cer_der_file, "-out", cer_pem_file],
+              check=True,
+          )
+          ver = subprocess.check_output(["openssl", "version"], text=True)
+          pkcs12_cmd = ["openssl", "pkcs12", "-export"]
+          if "OpenSSL 3" in ver:
+              pkcs12_cmd.append("-legacy")
+          pkcs12_cmd += [
+              "-inkey", key_file,
+              "-in", cer_pem_file,
+              "-out", p12_file,
+              "-passout", f"pass:{p12_pass}",
+          ]
+          subprocess.run(pkcs12_cmd, check=True)
 
           # 3. Bundle ID kaynağını bul
-          b_r = requests.get(f"{base_url}/bundleIds?filter[identifier]={bundle_id_str}", headers=headers)
+          b_r = requests.get(
+              f"{base_url}/bundleIds?filter[identifier]={bundle_id_str}",
+              headers=headers,
+              timeout=30,
+          )
           b_r.raise_for_status()
-          bundles = [b for b in b_r.json().get("data", []) if b["attributes"]["identifier"] == bundle_id_str]
+          bundles = [
+              b
+              for b in b_r.json().get("data", [])
+              if b["attributes"]["identifier"] == bundle_id_str
+          ]
           if not bundles:
               raise RuntimeError(f"Bundle ID '{bundle_id_str}' not found in Apple Developer account!")
           bundle_res_id = bundles[0]["id"]
@@ -163,14 +190,19 @@ jobs:
 
           # 4. Fazla üretilmiş "com.prestijmarket.app AppStore 1795026401" ve eski profilleri temizleyip
           #    yalnızca tek bir "com.prestijmarket.app AppStore" profilini aktif sertifika ile güncelle
-          p_r = requests.get(f"{base_url}/profiles", headers=headers)
+          p_r = requests.get(f"{base_url}/profiles", headers=headers, timeout=30)
           p_r.raise_for_status()
+          deleted_any = False
           for p in p_r.json().get("data", []):
               pid = p["id"]
               pname = p["attributes"].get("name", "")
               if pname == profile_name_target or pname.startswith(profile_name_target + " "):
                   print(f"Cleaning up old/duplicate profile: {pid} ('{pname}')")
-                  requests.delete(f"{base_url}/profiles/{pid}", headers=headers)
+                  requests.delete(f"{base_url}/profiles/{pid}", headers=headers, timeout=30)
+                  deleted_any = True
+
+          if deleted_any:
+              time.sleep(2)
 
           create_prof_r = requests.post(
               f"{base_url}/profiles",
@@ -192,6 +224,7 @@ jobs:
                       },
                   }
               },
+              timeout=30,
           )
           if create_prof_r.status_code >= 300:
               print("Create profile error:", create_prof_r.text)
@@ -205,22 +238,32 @@ jobs:
               f.write(base64.b64decode(prof_b64))
           print(f"Provisioning profile '{profile_name_target}' (UUID: {prof_uuid}) saved to {prof_path}")
           PY
+
+          if ! (
+            set -euo pipefail
+            python3 -m venv "$RUNNER_TEMP/asc_venv"
+            "$RUNNER_TEMP/asc_venv/bin/pip" install --quiet pyjwt cryptography requests
+            "$RUNNER_TEMP/asc_venv/bin/python" "$RUNNER_TEMP/setup_signing.py"
+
+            curl -fsSL https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer -o "$RUNNER_TEMP/AppleWWDRCAG3.cer"
+            security import "$RUNNER_TEMP/AppleWWDRCAG3.cer" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+
+            security import "$RUNNER_TEMP/dist.p12" \
+              -k "$KEYCHAIN_PATH" \
+              -P "ci_p12_pass_123" \
+              -A \
+              -T /usr/bin/codesign \
+              -T /usr/bin/security \
+              -T /usr/bin/productbuild
+
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          ) 2>&1 | tee "$RUNNER_TEMP/signing.log"; then
             echo "### Signing Setup Error" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
-            cat "$RUNNER_TEMP/signing.log" >> "$GITHUB_STEP_SUMMARY" || true
+            tail -n 120 "$RUNNER_TEMP/signing.log" >> "$GITHUB_STEP_SUMMARY" || true
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-
-          # P12 sertifikasını ve private key'i Keychain'e aktar
-          security import "$RUNNER_TEMP/dist.p12" \
-            -k "$KEYCHAIN_PATH" \
-            -P "ci_p12_pass_123" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security \
-            -T /usr/bin/productbuild
-
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
 
       - name: Verify Provisioning Profile & Certificate Match
         working-directory: market_app/ios
@@ -229,7 +272,43 @@ jobs:
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           PROFILE_FILE="$RUNNER_TEMP/AppStore.mobileprovision"
 
-          {
+          cat <<'PY' > "$RUNNER_TEMP/verify_signing.py"
+          import hashlib
+          import os
+          import plistlib
+          import re
+          import sys
+
+          runner_temp = os.environ["RUNNER_TEMP"]
+          with open(os.path.join(runner_temp, "profile.plist"), "rb") as f:
+              plist = plistlib.load(f)
+
+          profile_cert_sha1s = [
+              hashlib.sha1(cert_der).hexdigest().upper()
+              for cert_der in plist.get("DeveloperCertificates", [])
+          ]
+          print("Profile DeveloperCertificates SHA-1:", profile_cert_sha1s)
+
+          with open(os.path.join(runner_temp, "identities.txt"), "r") as f:
+              identities_text = f.read()
+
+          keychain_sha1s = re.findall(r'\b([0-9A-Fa-f]{40})\b\s+"[^"]*Distribution:', identities_text)
+          keychain_sha1s = [s.upper() for s in keychain_sha1s]
+          print("Keychain Distribution SHA-1 (with private key):", keychain_sha1s)
+
+          matched = set(profile_cert_sha1s) & set(keychain_sha1s)
+          if not keychain_sha1s:
+              print("::error::Keychain'de private key'e sahip geçerli bir Distribution sertifikası bulunamadı!")
+              sys.exit(1)
+          if not matched:
+              print(f"::error::Profil içindeki sertifika ({profile_cert_sha1s}) ile Keychain'deki sertifika ({keychain_sha1s}) eşleşmiyor!")
+              sys.exit(1)
+
+          print(f"Verified matching certificate SHA-1: {list(matched)}")
+          PY
+
+          if ! (
+            set -euo pipefail
             if [ ! -f "$PROFILE_FILE" ]; then
               echo "::error::Provisioning profile file not found at $PROFILE_FILE"
               exit 1
@@ -274,37 +353,7 @@ jobs:
             # Apple Distribution sertifikası (Keychain'deki private key'li kimlik) ile profildeki sertifikanın eşleştiğini doğrula
             echo "=== KEYCHAIN SIGNING IDENTITIES ==="
             security find-identity -v -p codesigning "$KEYCHAIN_PATH" | tee "$RUNNER_TEMP/identities.txt"
-
-            python3 - <<'PY'
-            import hashlib, os, plistlib, re, sys
-
-            runner_temp = os.environ["RUNNER_TEMP"]
-            with open(os.path.join(runner_temp, "profile.plist"), "rb") as f:
-                plist = plistlib.load(f)
-
-            profile_cert_sha1s = [
-                hashlib.sha1(cert_der).hexdigest().upper()
-                for cert_der in plist.get("DeveloperCertificates", [])
-            ]
-            print("Profile DeveloperCertificates SHA-1:", profile_cert_sha1s)
-
-            with open(os.path.join(runner_temp, "identities.txt"), "r") as f:
-                identities_text = f.read()
-
-            keychain_sha1s = re.findall(r'\b([0-9A-Fa-f]{40})\b\s+"[^"]*Distribution:', identities_text)
-            keychain_sha1s = [s.upper() for s in keychain_sha1s]
-            print("Keychain Distribution SHA-1 (with private key):", keychain_sha1s)
-
-            matched = set(profile_cert_sha1s) & set(keychain_sha1s)
-            if not keychain_sha1s:
-                print("::error::Keychain'de private key'e sahip geçerli bir Distribution sertifikası bulunamadı!")
-                sys.exit(1)
-            if not matched:
-                print(f"::error::Profil içindeki sertifika ({profile_cert_sha1s}) ile Keychain'deki sertifika ({keychain_sha1s}) eşleşmiyor!")
-                sys.exit(1)
-
-            print(f"Verified matching certificate SHA-1: {list(matched)}")
-            PY
+            python3 "$RUNNER_TEMP/verify_signing.py"
 
             # Sadece Runner hedefinin imzalama ayarlarını doğrula (SPM paket hedeflerine dokunmaz)
             fastlane run update_code_signing_settings \
@@ -316,7 +365,13 @@ jobs:
               profile_name:"$PROFILE_SPECIFIER" \
               profile_uuid:"$PROFILE_UUID" \
               bundle_identifier:"$APP_BUNDLE_ID"
-          } 2>&1 | tee "$RUNNER_TEMP/verify.log"
+          ) 2>&1 | tee "$RUNNER_TEMP/verify.log"; then
+            echo "### Profile & Certificate Verification Error" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 120 "$RUNNER_TEMP/verify.log" >> "$GITHUB_STEP_SUMMARY" || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Flutter pub get
         working-directory: market_app
@@ -337,7 +392,11 @@ jobs:
             -scheme Runner \
             -configuration Release \
             -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/Runner.xcarchive" 2>&1 | tee "$RUNNER_TEMP/archive.log"; then
+            -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_SPECIFIER" 2>&1 | tee "$RUNNER_TEMP/archive.log"; then
             echo "=== XCODE ARCHIVE ERRORS ==="
             grep -E "error:|warning:.*Signing|Provisioning|certificate|requires a" "$RUNNER_TEMP/archive.log" || true
             echo "### Xcode Archive Error Output" >> "$GITHUB_STEP_SUMMARY"
