@@ -134,7 +134,7 @@ class Product {
         ? storedImageUrl
         : (imageField.isNotEmpty
               ? '${AppConstants.baseUrl}/static/uploads/$imageField'
-              : 'https://picsum.photos/200');
+              : '');
 
     return Product(
       id: (json['id'] as num?)?.toInt() ?? 0,

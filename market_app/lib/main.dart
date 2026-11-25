@@ -276,6 +276,9 @@ class _MarketHomePageState extends State<MarketHomePage> {
         List<Product> products = body
             .map((dynamic item) => Product.fromJson(item))
             .toList();
+        if (AgeVerification.isTobaccoRestrictedPlatform) {
+          products = products.where((p) => !p.isTobacco).toList();
+        }
         if (categoryId == null) {
           CartManager().syncWithProducts(products);
         }
@@ -310,9 +313,13 @@ class _MarketHomePageState extends State<MarketHomePage> {
     if (body is! List) {
       throw const FormatException('Haftanın indirimleri yanıtı geçersiz.');
     }
-    return body
+    var products = body
         .map((item) => Product.fromJson(item as Map<String, dynamic>))
         .toList();
+    if (AgeVerification.isTobaccoRestrictedPlatform) {
+      products = products.where((p) => !p.isTobacco).toList();
+    }
+    return products;
   }
 
   Future<List<Category>> _fetchCategories() async {
@@ -326,9 +333,13 @@ class _MarketHomePageState extends State<MarketHomePage> {
       }
 
       final body = json.decode(response.body) as List<dynamic>;
-      return body
+      var categories = body
           .map((item) => Category.fromJson(item as Map<String, dynamic>))
           .toList();
+      if (AgeVerification.isTobaccoRestrictedPlatform) {
+        categories = categories.where((c) => !c.isTobacco).toList();
+      }
+      return categories;
     } catch (_) {
       return const <Category>[];
     }
@@ -2268,7 +2279,11 @@ class _CategoryProductsScreenState extends State<CategoryProductsScreen> {
     final response = await http.get(uri).timeout(const Duration(seconds: 10));
     if (response.statusCode == 200) {
       final List<dynamic> body = json.decode(response.body);
-      return body.map((item) => Product.fromJson(item)).toList();
+      var products = body.map((item) => Product.fromJson(item)).toList();
+      if (AgeVerification.isTobaccoRestrictedPlatform) {
+        products = products.where((p) => !p.isTobacco).toList();
+      }
+      return products;
     }
     throw Exception('Ürünler yüklenemedi (${response.statusCode}).');
   }

@@ -3,9 +3,11 @@
 // Bu testler, uygulamanın başlangıç ekranının (AuthScreen) doğru şekilde
 // render edildiğini ve temel UI bileşenlerinin mevcut olduğunu doğrular.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:prestij_market/core/age_verification.dart';
 import 'package:prestij_market/core/session_manager.dart';
 import 'package:prestij_market/main.dart';
 import 'package:prestij_market/models/product_model.dart';
@@ -47,6 +49,38 @@ void main() {
     expect(cart.totalPrice, 1300);
     expect(cart.minimumOrderTotal, 300);
     cart.items.clear();
+  });
+
+  test('iOS platform hides and blocks tobacco products while Android allows them', () {
+    final tobaccoProduct = Product(
+      id: 99,
+      title: 'Sigara Paketi',
+      description: '',
+      price: 80,
+      imageUrl: '',
+      stock: 5,
+      category: 'Sigara/Tütün',
+    );
+    final cart = CartManager()..items.clear();
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    try {
+      expect(AgeVerification.isTobaccoRestrictedPlatform, isTrue);
+      expect(cart.addItem(tobaccoProduct), isFalse);
+      expect(cart.items, isEmpty);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      expect(AgeVerification.isTobaccoRestrictedPlatform, isFalse);
+      expect(cart.addItem(tobaccoProduct), isTrue);
+      expect(cart.items.length, 1);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      cart.items.clear();
+    }
   });
 
   testWidgets('AuthScreen — e-posta giriş seçenekleri doğru render edilir', (

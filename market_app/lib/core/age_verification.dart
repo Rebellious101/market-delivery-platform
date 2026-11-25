@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'constants.dart';
@@ -5,6 +6,13 @@ import 'localization.dart';
 
 class AgeVerification {
   AgeVerification._();
+
+  /// App Store Guideline 1.4.3 gereği iOS/macOS üzerinde sigara ve tütün
+  /// ürünlerinin gizlenip gizlenmeyeceğini belirler.
+  static bool get isTobaccoRestrictedPlatform =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
 
   static const List<String> _alcoholKeywords = [
     'alkol',
@@ -36,6 +44,10 @@ class AgeVerification {
     'tobacco',
     'cigarette',
     'puro',
+    'nargile',
+    'hookah',
+    'vape',
+    'e-cigarette',
     'iqos',
     'heets',
     'terea',

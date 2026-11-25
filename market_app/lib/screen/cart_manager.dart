@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/age_verification.dart';
 import '../core/local_storage.dart';
 import '../models/product_model.dart';
 
@@ -56,7 +57,10 @@ class CartManager extends ChangeNotifier {
       for (final entry in raw) {
         if (entry is Map) {
           final item = CartItem.fromJson(Map<String, dynamic>.from(entry));
-          if (item.product.id > 0 && item.quantity > 0) {
+          if (item.product.id > 0 &&
+              item.quantity > 0 &&
+              !(AgeVerification.isTobaccoRestrictedPlatform &&
+                  item.product.isTobacco)) {
             _items.add(item);
           }
         }
@@ -82,6 +86,12 @@ class CartManager extends ChangeNotifier {
 
     for (int i = _items.length - 1; i >= 0; i--) {
       final current = _items[i];
+      if (AgeVerification.isTobaccoRestrictedPlatform &&
+          current.product.isTobacco) {
+        _items.removeAt(i);
+        changed = true;
+        continue;
+      }
       final updatedProduct = byId[current.product.id];
       if (updatedProduct != null) {
         if (updatedProduct.stock <= 0) {
@@ -120,6 +130,9 @@ class CartManager extends ChangeNotifier {
   // Sepete ürün ekleme
   bool addItem(Product product) {
     if (product.stock <= 0) return false;
+    if (AgeVerification.isTobaccoRestrictedPlatform && product.isTobacco) {
+      return false;
+    }
     if (product.isTobacco && totalTobaccoQuantity >= maxTobaccoQuantity) {
       return false;
     }
