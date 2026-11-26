@@ -196,4 +196,19 @@ class AppStrings {
       : 'Hesabınız kalıcı olarak silindi.';
   String get cancel => isEnglish ? 'Cancel' : 'Vazgeç';
   String get delete => isEnglish ? 'Delete' : 'Sil';
+  String get privacyPolicyTitle =>
+      isEnglish ? 'Privacy Policy' : 'Gizlilik Politikası';
+  String get privacyPolicyBody => isEnglish
+      ? 'Prestij Market collects only the data necessary to provide grocery delivery services:\n\n'
+          '• Phone Number & Name: Used for account verification (SMS) and order delivery communication.\n'
+          '• Delivery Address & Location: Used to select your address on the map and deliver your orders.\n'
+          '• Order History: Used to track and display your past orders.\n\n'
+          'We do not sell your personal data or track you across third-party apps or websites.\n\n'
+          'You can permanently delete your account and associated data at any time from Profile > Account Settings > Delete Account.'
+      : 'Prestij Market, yalnızca market teslimat hizmetini sunmak için gerekli verileri toplar:\n\n'
+          '• Telefon Numarası ve Ad: Hesap doğrulama (SMS) ve teslimat iletişimi için kullanılır.\n'
+          '• Teslimat Adresi ve Konum: Adresinizi haritadan seçmek ve siparişinizi ulaştırmak için kullanılır.\n'
+          '• Sipariş Geçmişi: Geçmiş siparişlerinizi takip edebilmeniz için saklanır.\n\n'
+          'Kişisel verileriniz üçüncü taraflara satılmaz ve uygulama dışı reklam takibi yapılmaz.\n\n'
+          'Hesabınızı ve kayıtlı verilerinizi istediğiniz zaman Profil > Hesap Ayarları > Hesabımı Sil menüsünden kalıcı olarak silebilirsiniz.';
 }

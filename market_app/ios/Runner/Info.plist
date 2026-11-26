@@ -36,9 +36,9 @@
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Teslimat adresinizi harita üzerinden kolayca seçebilmeniz için konum izni gereklidir.</string>
+	<string>Teslimat adresinizi harita üzerinden kolayca seçebilmeniz için konum izni gereklidir. / Location access is used to select your delivery address on the map.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Teslimat adresinizi harita üzerinden doğru şekilde belirleyebilmeniz için konum izni gereklidir.</string>
+	<string>Teslimat adresinizi harita üzerinden doğru şekilde belirleyebilmeniz için konum izni gereklidir. / Location access is used to accurately determine your delivery address on the map.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

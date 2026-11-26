@@ -1707,6 +1707,11 @@ class _MarketHomePageState extends State<MarketHomePage> {
               onTap: () => _showNotificationsSheet(context),
             ),
             _buildProductRequestSection(strings),
+            _buildProfileMenuItem(
+              icon: Icons.privacy_tip_outlined,
+              title: strings.privacyPolicyTitle,
+              onTap: () => _showPrivacyPolicyDialog(strings),
+            ),
 
             if (isAuthenticated) ...[
               _buildProfileMenuItem(
@@ -1732,6 +1737,48 @@ class _MarketHomePageState extends State<MarketHomePage> {
           ],
         );
       },
+    );
+  }
+
+  void _showPrivacyPolicyDialog(AppStrings strings) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(
+              Icons.privacy_tip_outlined,
+              color: AppConstants.primaryColor,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                strings.privacyPolicyTitle,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 17,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Text(
+            strings.privacyPolicyBody,
+            style: const TextStyle(fontSize: 14, height: 1.45),
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppConstants.primaryColor,
+            ),
+            child: Text(strings.ok),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1808,8 +1855,15 @@ class _MarketHomePageState extends State<MarketHomePage> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) {
+          final rawInput = confirmController.text.trim();
+          final normalizedInput = rawInput
+              .replaceAll('i', 'İ')
+              .replaceAll('ı', 'I')
+              .toUpperCase();
           final isMatch =
-              confirmController.text.trim().toUpperCase() == confirmWord;
+              normalizedInput == confirmWord ||
+              rawInput.toUpperCase() == confirmWord ||
+              (!strings.isEnglish && rawInput.toUpperCase() == 'SIL');
           return AlertDialog(
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(20),
